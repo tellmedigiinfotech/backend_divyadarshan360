@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     razorpay_key_id: str
     razorpay_key_secret: str
+    razorpay_webhook_secret: str | None = None
     receipt_prefix: str = "DD360"
 
     firebase_credentials_path: str | None = None

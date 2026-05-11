@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .firebase import init_firebase
-from .routers import auth, customers, orders
+from .routers import auth, customers, orders, razorpay_webhook
 
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(orders.router)
 app.include_router(customers.router)
+app.include_router(razorpay_webhook.router)
 
 
 @app.get("/health", tags=["Meta"])

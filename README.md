@@ -19,15 +19,40 @@ Persists orders, transactions, customers, and contact-form submissions to
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `POST` | `/orders/create_order` | — | Look up product + price, upsert customer by phone, create a Razorpay order, persist a pending order doc. Returns `razorpay_order_id`, `razorpay_key_id`, `amount` (paise), `currency`, `receipt`. |
-| `POST` | `/orders/verify_payment` | — | Verify Razorpay signature, double-check amount/currency by fetching the payment from Razorpay, mark the order **paid**, and record a transaction. |
-| `GET`  | `/orders/{razorpay_order_id}` | — | Public-safe order view (for the thank-you page / order lookup). |
+| `POST` | `/orders/create_order` | **Bearer** | Look up product + price, resolve customer from token (UID → phone fallback), create a Razorpay order, persist a pending order doc linked to `firebase_uid`. Returns `razorpay_order_id`, `razorpay_key_id`, `amount` (paise), `currency`, `receipt`. |
+| `POST` | `/orders/verify_payment` | **Bearer** | Verify Razorpay signature + UID ownership, double-check amount/currency by fetching the payment from Razorpay, mark the order **paid**, and record a transaction. Idempotent with the webhook (never downgrades a paid order to failed). |
+| `GET`  | `/orders/{razorpay_order_id}` | **Bearer** | Order view, scoped to the caller's UID. |
+| `POST` | `/razorpay/webhook` | **HMAC** | Razorpay -> server. Verifies `X-Razorpay-Signature` against `RAZORPAY_WEBHOOK_SECRET`. Handles `payment.captured`, `payment.failed`, `refund.created`, `refund.processed`, `order.paid`. Idempotent. |
 | `POST` | `/customers/contact` | — | Persist a contact-form submission. |
 | `GET`  | `/auth/me` | **Bearer** | Verify the Firebase ID token, ensure a customer doc exists (creating one if needed), return both the token claims and the linked customer profile. |
 | `GET`  | `/customers/me` | **Bearer** | Current user's customer profile. |
 | `PUT`  | `/customers/me` | **Bearer** | Update full name, email, and/or last shipping address. |
 | `GET`  | `/customers/me/orders` | **Bearer** | List the current user's orders (latest first). Supports `?limit=`. |
 | `GET`  | `/health` | — | Liveness probe. |
+
+### Razorpay webhook
+
+Production correctness requires the webhook, because the browser-driven `/orders/verify_payment` call can be lost (network drop, tab close, refund happening async, etc). The webhook is the source of truth.
+
+**Configure in Razorpay Dashboard:**
+
+1. Dashboard → **Settings** → **Webhooks** → **Add new webhook**
+2. Webhook URL: `https://<your-backend>/razorpay/webhook` (use [ngrok](https://ngrok.com) for local: `ngrok http 8001` → use the https URL)
+3. Active events: at minimum `payment.captured`, `payment.failed`. Also useful: `refund.created`, `refund.processed`, `order.paid`.
+4. Set a strong secret string → copy it → put in `.env` as `RAZORPAY_WEBHOOK_SECRET=<that string>`.
+
+**Test locally:**
+
+```bash
+ngrok http 8001
+# use the https forwarding URL in the Razorpay Dashboard
+# Razorpay Dashboard -> Webhooks -> the new webhook -> "Send test webhook"
+```
+
+The handler writes to:
+- `orders/{razorpay_order_id}` — flips `status` to `paid` or `failed`, sets `paid_at`, `paid_via`.
+- `transactions/{razorpay_payment_id}` — full payment body + `source: "webhook"`.
+- `refunds/{refund_id}` — for refund events.
 
 ### Authentication
 
