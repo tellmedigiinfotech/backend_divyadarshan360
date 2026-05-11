@@ -50,9 +50,35 @@ ngrok http 8001
 ```
 
 The handler writes to:
-- `orders/{razorpay_order_id}` — flips `status` to `paid` or `failed`, sets `paid_at`, `paid_via`.
+- `orders/{razorpay_order_id}` — flips `status` to `paid` or `failed`, sets `paid_at`, `paid_via`, `notified_at`.
 - `transactions/{razorpay_payment_id}` — full payment body + `source: "webhook"`.
 - `refunds/{refund_id}` — for refund events.
+
+### Email + SMS receipts
+
+After `payment.captured` (and `order.paid`), the webhook fires a transactional receipt to both the customer's email and phone. Idempotent via `notified_at` on the order doc — Razorpay retries (or duplicate events) won't double-send. Failures are logged and stored in `notification_result` but never block the webhook from returning 200.
+
+**SMTP** — reuses the tellmedigi.mithiskyconnect.com creds. Set in `.env`:
+```
+SMTP_SERVER=tellmedigi.mithiskyconnect.com
+SMTP_PORT=465
+SMTP_USERNAME=<your sender>
+SMTP_PASSWORD=<your password>
+SMTP_FROM_NAME=Divya Darshan 360
+```
+Port 465 → SSL on connect. Port 587 → STARTTLS (the module auto-picks).
+
+**SMS Striker** — same creds the legacy backend uses for OTP. Set in `.env`:
+```
+SMS_STRIKER_USERNAME=<your username>
+SMS_STRIKER_PASSWORD=<your password>
+SMS_STRIKER_CHANNEL=<your DLT-approved sender id>
+SMS_STRIKER_ORDER_TEMPLATE_ID=<DLT template id for order confirmation>
+```
+
+> **DLT note**: Indian telcos require every transactional SMS to use a pre-registered template id. The OTP template id `1407162495551105851` is for OTPs only — register a separate template for order-confirmation text under your DLT portal and put its id in `SMS_STRIKER_ORDER_TEMPLATE_ID`. The template text the system sends is: `"Divya Darshan 360: Payment of Rs.{amount} received for {item}. Order #{short_id}. Ships within 24h. Help: {phone}"`.
+
+If either set of creds is missing, that channel is skipped (logged with `reason: smtp_not_configured` or `sms_not_configured`). The other channel still tries.
 
 ### Authentication
 

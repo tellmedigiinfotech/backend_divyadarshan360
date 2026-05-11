@@ -6,12 +6,40 @@ from fastapi import APIRouter, HTTPException, Request
 from .. import razorpay_utils
 from ..config import settings
 from ..firebase import SERVER_TIMESTAMP, db
+from ..notifications import send_payment_receipt
 from ..schemas.order import OrderStatus
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/razorpay", tags=["Razorpay Webhook"])
+
+
+async def _send_receipt_if_needed(order_id: str) -> None:
+    """Fire-and-log notification dispatch.
+    Idempotent via `notified_at` on the order doc."""
+    try:
+        order_ref = db().collection("orders").document(order_id)
+        snap = order_ref.get()
+        if not snap.exists:
+            return
+        data = snap.to_dict() or {}
+        if data.get("status") != OrderStatus.paid.value:
+            return
+        if data.get("notified_at"):
+            return
+        data["razorpay_order_id"] = order_id
+        result = await send_payment_receipt(data)
+        order_ref.set(
+            {
+                "notified_at": SERVER_TIMESTAMP,
+                "notification_result": result,
+            },
+            merge=True,
+        )
+        logger.info("Receipt dispatch for %s: %s", order_id, result)
+    except Exception:
+        logger.exception("Receipt dispatch failed for %s (suppressed)", order_id)
 
 
 @router.post("/webhook")
@@ -42,14 +70,18 @@ async def razorpay_webhook(request: Request) -> dict:
 
     if event_type == "payment.captured":
         _handle_payment_captured(payload, event_id)
+        order_id = (_payment_entity(payload).get("order_id"))
+        if order_id:
+            await _send_receipt_if_needed(order_id)
     elif event_type == "payment.failed":
         _handle_payment_failed(payload, event_id)
     elif event_type in ("refund.created", "refund.processed"):
         _handle_refund(payload, event_id, event_type)
     elif event_type == "order.paid":
-        # Some merchants enable this in addition to payment.captured.
-        # The payment is already on the event.
         _handle_payment_captured(payload, event_id)
+        order_id = (_payment_entity(payload).get("order_id"))
+        if order_id:
+            await _send_receipt_if_needed(order_id)
     else:
         logger.info("Razorpay webhook: unhandled event type %s", event_type)
 

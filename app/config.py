@@ -24,6 +24,21 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str | None = None
     receipt_prefix: str = "DD360"
 
+    smtp_server: str | None = None
+    smtp_port: int = 465
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_name: str = "Divya Darshan 360"
+
+    sms_striker_username: str | None = None
+    sms_striker_password: str | None = None
+    sms_striker_channel: str | None = None
+    sms_striker_order_template_id: str | None = None
+    sms_striker_url: str = "https://www.smsstriker.com/API/sms.php"
+
+    merchant_support_email: str = "connect@youtellme.ai"
+    merchant_support_phone: str = "+91 90499 21850"
+
     firebase_credentials_path: str | None = None
     firebase_credentials_json: str | None = None
 
