@@ -17,13 +17,45 @@ Persists orders, transactions, customers, and contact-form submissions to
 
 ## Endpoints
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/orders/create_order` | Look up product + price, upsert customer by phone, create a Razorpay order, persist a pending order doc. Returns `razorpay_order_id`, `razorpay_key_id`, `amount` (paise), `currency`, `receipt`. |
-| `POST` | `/orders/verify_payment` | Verify Razorpay signature, double-check amount/currency by fetching the payment from Razorpay, mark the order **paid**, and record a transaction. |
-| `GET`  | `/orders/{razorpay_order_id}` | Public-safe order view (for the thank-you page / order lookup). |
-| `POST` | `/customers/contact` | Persist a contact-form submission. |
-| `GET`  | `/health` | Liveness probe. |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/orders/create_order` | — | Look up product + price, upsert customer by phone, create a Razorpay order, persist a pending order doc. Returns `razorpay_order_id`, `razorpay_key_id`, `amount` (paise), `currency`, `receipt`. |
+| `POST` | `/orders/verify_payment` | — | Verify Razorpay signature, double-check amount/currency by fetching the payment from Razorpay, mark the order **paid**, and record a transaction. |
+| `GET`  | `/orders/{razorpay_order_id}` | — | Public-safe order view (for the thank-you page / order lookup). |
+| `POST` | `/customers/contact` | — | Persist a contact-form submission. |
+| `GET`  | `/auth/me` | **Bearer** | Verify the Firebase ID token, ensure a customer doc exists (creating one if needed), return both the token claims and the linked customer profile. |
+| `GET`  | `/customers/me` | **Bearer** | Current user's customer profile. |
+| `PUT`  | `/customers/me` | **Bearer** | Update full name, email, and/or last shipping address. |
+| `GET`  | `/customers/me/orders` | **Bearer** | List the current user's orders (latest first). Supports `?limit=`. |
+| `GET`  | `/health` | — | Liveness probe. |
+
+### Authentication
+
+Endpoints marked **Bearer** require an `Authorization: Bearer <firebaseIdToken>` header. Tokens come from the Firebase Auth web SDK on the client (phone OTP flow); the backend verifies them with `firebase_admin.auth.verify_id_token`.
+
+Frontend flow (phone OTP, sketch):
+
+```ts
+import { initializeApp } from "firebase/app"
+import { getAuth, RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth"
+
+const auth = getAuth(initializeApp({ /* firebaseConfig */ }))
+
+// 1. Send OTP
+const verifier = new RecaptchaVerifier(auth, "recaptcha-container", { size: "invisible" })
+const confirmation = await signInWithPhoneNumber(auth, "+919876543210", verifier)
+
+// 2. User enters OTP
+const cred = await confirmation.confirm(code)
+const idToken = await cred.user.getIdToken()
+
+// 3. Call protected backend endpoints
+const res = await fetch(`${API_BASE}/auth/me`, {
+  headers: { Authorization: `Bearer ${idToken}` },
+})
+```
+
+On the backend, the dependency lives in `app/auth.py`. The first time a Firebase user calls `/auth/me`, the resolver either backfills `firebase_uid` onto an existing phone-keyed customer doc, or creates a fresh one.
 
 Auto-docs at `http://localhost:8001/docs` and `/redoc`.
 

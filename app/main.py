@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .firebase import init_firebase
-from .routers import customers, orders
+from .routers import auth, customers, orders
 
 
 @asynccontextmanager
@@ -29,6 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(orders.router)
 app.include_router(customers.router)
 

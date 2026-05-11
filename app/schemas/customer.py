@@ -51,3 +51,22 @@ class ContactFormInput(BaseModel):
 class ContactFormOutput(BaseModel):
     id: str
     message: str = "Thank you. We will get back to you shortly."
+
+
+class CustomerUpdateInput(BaseModel):
+    full_name: Annotated[str | None, Field(default=None, min_length=2, max_length=100)] = None
+    email: EmailStr | None = None
+    last_shipping_address: ShippingAddressInput | None = None
+
+
+class CustomerOrderListItem(BaseModel):
+    razorpay_order_id: str
+    receipt: str
+    status: str
+    amount: int
+    amount_paid: int
+    currency: str
+    product_name: str
+    quantity: int
+    created_at: str | None = None
+    paid_at: str | None = None
