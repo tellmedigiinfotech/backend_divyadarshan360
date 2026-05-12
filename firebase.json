@@ -1,0 +1,24 @@
+{
+  "functions": [
+    {
+      "source": ".",
+      "codebase": "default",
+      "runtime": "python312",
+      "ignore": [
+        "venv",
+        ".venv",
+        ".git",
+        "*.local",
+        ".env*",
+        "!.env",
+        "__pycache__",
+        ".pytest_cache",
+        "*-service-account.json",
+        "service-account.json",
+        "firebase-credentials.json",
+        "divyadarshanweb-*-firebase-adminsdk-*.json",
+        "run_local.py"
+      ]
+    }
+  ]
+}

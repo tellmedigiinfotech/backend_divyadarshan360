@@ -121,6 +121,79 @@ Auto-docs at `http://localhost:8001/docs` and `/redoc`.
 
 No composite indexes required. Single-field index on `customers.phone` is automatic.
 
+## Deploying to Firebase Functions (production)
+
+This backend is set up to deploy as a single 2nd-gen HTTPS Firebase Function in
+`asia-south1` (Mumbai). Under the hood Firebase deploys it as a Cloud Run
+service. Cost: free up to 2M invocations / 400k GB-sec / 200k CPU-sec per month
+on the Blaze plan.
+
+### One-time setup
+
+1. **Install Firebase CLI** (Node 18+ required):
+   ```bash
+   npm install -g firebase-tools
+   firebase login
+   ```
+2. The repo already contains `firebase.json` (function config) and `.firebaserc`
+   (project binding to `divyadarshanweb-3c2d7`). No `firebase init` needed.
+3. Make sure your local `.env` has the production values you want deployed
+   (Razorpay live keys, real SMTP creds, etc.). Firebase will upload `.env`
+   alongside the function source — it's not committed to git.
+
+### Deploy
+
+```bash
+cd backend_dd360
+firebase deploy --only functions
+```
+
+The CLI will:
+- Build a container from the source (Python 3.12 runtime).
+- Push it to Artifact Registry.
+- Create / update a Cloud Run service in `asia-south1`.
+- Print the function URL: `https://api-<hash>-asia-south1.run.app`.
+
+Hit `https://<that-url>/health` — should return `{"status":"ok"}`.
+
+### After first deploy — three things to update
+
+1. **Razorpay Dashboard → Settings → Webhooks** → change the webhook URL to
+   `https://api-<hash>-asia-south1.run.app/razorpay/webhook`. The secret stays
+   the same.
+2. **Vercel → frontend project → Settings → Environment Variables** →
+   `NEXT_PUBLIC_API_BASE = https://api-<hash>-asia-south1.run.app` → redeploy.
+3. **Firebase Console → Authentication → Settings → Authorized domains** →
+   confirm your Vercel domain is listed (so the OTP flow's reCAPTCHA accepts
+   tokens from production).
+
+### Credentials — what changes vs local
+
+| Thing | Locally | On Firebase Functions |
+|---|---|---|
+| Firebase Admin (Firestore access) | service-account JSON file at `FIREBASE_CREDENTIALS_PATH` | **Auto** — the function uses the runtime's attached service account (ADC). No file needed. |
+| Razorpay keys, webhook secret | `.env` | `.env` (deployed with the function) |
+| SMTP, SMS Striker creds | `.env` | `.env` |
+| CORS allowlist | `.env` (`ALLOWED_ORIGINS=...`) | `.env` — make sure your production Vercel domain is in the list |
+
+For real secrets (Razorpay live secret, SMTP password, webhook secret) you can
+later promote them to Google Secret Manager via:
+```bash
+firebase functions:secrets:set RAZORPAY_KEY_SECRET
+```
+and bind them to the function — but `.env` is fine for v1.
+
+### Local development (unchanged)
+
+```bash
+python run_local.py
+```
+This bypasses Firebase Functions entirely and runs FastAPI under uvicorn with
+hot-reload. `main.py` is for production deploy only; running it directly does
+nothing useful in dev.
+
+---
+
 ## Setup
 
 ```bash
