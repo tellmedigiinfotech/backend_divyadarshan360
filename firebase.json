@@ -7,17 +7,12 @@
       "ignore": [
         "venv",
         ".venv",
-        ".git",
-        "*.local",
-        ".env*",
-        "!.env",
         "__pycache__",
+        ".git",
         ".pytest_cache",
-        "*-service-account.json",
-        "service-account.json",
-        "firebase-credentials.json",
-        "divyadarshanweb-*-firebase-adminsdk-*.json",
-        "run_local.py"
+        "run_local.py",
+        "divyadarshanweb-3c2d7-firebase-adminsdk-fbsvc-b8f0850f4b.json",
+        "service-account.json"
       ]
     }
   ]
