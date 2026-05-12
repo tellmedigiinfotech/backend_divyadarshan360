@@ -11,13 +11,14 @@ from a2wsgi import ASGIMiddleware
 from firebase_functions import https_fn, options
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from app.firebase import init_firebase
 from app.main import app as fastapi_app
 
 
-# Firebase Functions doesn't run FastAPI's lifespan hooks, so initialize the
-# Firestore client eagerly at module import time.
-init_firebase()
+# Firebase's deploy analyzer imports this module on the local venv to discover
+# function decorators. If we eagerly init Firebase here, ADC fails locally and
+# the analyzer aborts. firebase.py already inits lazily on first db() call, so
+# leaving it out at module scope is safe on both the analyzer and the live
+# function runtime.
 
 # Convert ASGI -> WSGI so Firebase Functions can drive the request.
 _wsgi_app = ASGIMiddleware(fastapi_app)

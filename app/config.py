@@ -43,8 +43,10 @@ class Settings(BaseSettings):
     merchant_support_email: str = "connect@youtellme.ai"
     merchant_support_phone: str = "+91 90499 21850"
 
-    firebase_credentials_path: str | None = None
-    firebase_credentials_json: str | None = None
+    # Firebase reserves env vars beginning with FIREBASE_/X_GOOGLE_/EXT_ in
+    # Cloud Functions, so we use neutral SERVICE_ACCOUNT_* names instead.
+    service_account_path: str | None = None
+    service_account_json: str | None = None
 
     @field_validator("allowed_origins", mode="before")
     @classmethod

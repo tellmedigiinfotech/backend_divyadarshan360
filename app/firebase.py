@@ -23,18 +23,18 @@ def _build_credentials() -> credentials.Base | None:
        correct path inside GCP runtimes like Firebase Functions / Cloud Run,
        where the platform's built-in service account is already attached.
     """
-    if settings.firebase_credentials_json:
-        info = json.loads(settings.firebase_credentials_json)
+    if settings.service_account_json:
+        info = json.loads(settings.service_account_json)
         return credentials.Certificate(info)
 
-    if settings.firebase_credentials_path:
-        cred_path = Path(settings.firebase_credentials_path)
+    if settings.service_account_path:
+        cred_path = Path(settings.service_account_path)
         if not cred_path.is_absolute():
             cred_path = (Path(__file__).resolve().parent.parent / cred_path).resolve()
         if cred_path.exists():
             return credentials.Certificate(str(cred_path))
         logger.warning(
-            "FIREBASE_CREDENTIALS_PATH=%s does not exist; falling back to ADC",
+            "SERVICE_ACCOUNT_PATH=%s does not exist; falling back to ADC",
             cred_path,
         )
 
