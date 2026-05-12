@@ -58,15 +58,15 @@ The handler writes to:
 
 After `payment.captured` (and `order.paid`), the webhook fires a transactional receipt to both the customer's email and phone. Idempotent via `notified_at` on the order doc — Razorpay retries (or duplicate events) won't double-send. Failures are logged and stored in `notification_result` but never block the webhook from returning 200.
 
-**SMTP** — reuses the tellmedigi.mithiskyconnect.com creds. Set in `.env`:
+**Email via Resend** — `https://resend.com`. 3 000 emails/month free, 100/day. Set in `.env`:
 ```
-SMTP_SERVER=tellmedigi.mithiskyconnect.com
-SMTP_PORT=465
-SMTP_USERNAME=<your sender>
-SMTP_PASSWORD=<your password>
-SMTP_FROM_NAME=Divya Darshan 360
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
+RESEND_FROM=Divya Darshan 360 <noreply@divyadarshan360.com>
 ```
-Port 465 → SSL on connect. Port 587 → STARTTLS (the module auto-picks).
+Steps:
+1. Sign up at resend.com → API Keys → create a key.
+2. Domains → Add `divyadarshan360.com` → Resend shows you SPF + DKIM + DMARC DNS records → add them to your domain registrar → wait for "verified" status (usually a few minutes).
+3. Until your domain is verified, leave `RESEND_FROM` as the default (`onboarding@resend.dev`). That sandbox sender can only deliver to your Resend account's email — fine for testing, not for real customers.
 
 **SMS Striker** — same creds the legacy backend uses for OTP. Set in `.env`:
 ```
