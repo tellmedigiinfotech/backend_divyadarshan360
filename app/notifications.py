@@ -253,20 +253,112 @@ async def send_sms_async(phone_e164_or_local: str, message: str) -> dict:
     return {"sent": True, "body": res.text[:200]}
 
 
+def render_whatsapp_params(order: dict[str, Any]) -> list[str]:
+    """Returns the 4 body parameters for the `order_confirmation` template:
+    {{1}} customer name, {{2}} order id, {{3}} amount (₹), {{4}} item name.
+    Keep this in sync with the template you register in Meta Business Manager."""
+    item = order.get("item") or {}
+    customer = order.get("customer") or {}
+    amount_paise = int(order.get("amount_paid", order.get("amount", 0)))
+    amount_rupees = amount_paise // 100
+    order_id = order.get("razorpay_order_id", "")
+    return [
+        (customer.get("full_name") or "Devotee").strip() or "Devotee",
+        order_id,
+        str(amount_rupees),
+        item.get("name", "your order"),
+    ]
+
+
+async def send_whatsapp_async(
+    phone_e164_or_local: str,
+    template_name: str,
+    params: list[str],
+    language: str | None = None,
+) -> dict:
+    """Send a WhatsApp template message via Meta Cloud API.
+
+    See render_whatsapp_params() for the canonical parameter mapping. The
+    template must be approved in Meta Business Manager before any send
+    succeeds — un-approved templates return a 400 with code 132001.
+    """
+    if not settings.whatsapp_access_token or not settings.whatsapp_phone_number_id:
+        return {"sent": False, "reason": "whatsapp_not_configured"}
+
+    digits = _strip_e164(phone_e164_or_local)
+    if len(digits) == 10:
+        digits = "91" + digits
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": digits,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language or settings.whatsapp_template_language},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": str(p)} for p in params],
+                }
+            ],
+        },
+    }
+
+    url = (
+        f"https://graph.facebook.com/{settings.whatsapp_graph_version}/"
+        f"{settings.whatsapp_phone_number_id}/messages"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {settings.whatsapp_access_token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except Exception as exc:
+        logger.exception("WhatsApp Cloud API request failed for %s", digits)
+        return {"sent": False, "reason": "whatsapp_network_error", "error": str(exc)}
+
+    if res.status_code != 200:
+        body_snip = (res.text or "")[:400]
+        logger.warning("WhatsApp non-200 (status=%s body=%s)", res.status_code, body_snip)
+        return {
+            "sent": False,
+            "reason": "whatsapp_http_error",
+            "status": res.status_code,
+            "body": body_snip,
+        }
+
+    try:
+        body = res.json()
+        message_id = body.get("messages", [{}])[0].get("id")
+        return {"sent": True, "id": message_id}
+    except Exception:
+        return {"sent": True}
+
+
 async def send_payment_receipt(order: dict[str, Any]) -> dict:
-    """Returns {"email": {...}, "sms": {...}}. Never raises."""
+    """Returns {"email": {...}, "whatsapp": {...}}. Never raises."""
     customer = order.get("customer") or {}
     email_addr = customer.get("email")
     phone = customer.get("phone")
 
-    result: dict = {"email": {"sent": False, "reason": "skipped"}, "sms": {"sent": False, "reason": "skipped"}}
+    result: dict = {
+        "email": {"sent": False, "reason": "skipped"},
+        "whatsapp": {"sent": False, "reason": "skipped"},
+    }
 
     try:
         subject, html_body, text_body = render_receipt(order)
     except Exception as exc:
         logger.exception("Failed to render receipt template")
-        return {"email": {"sent": False, "reason": "render_error", "error": str(exc)},
-                "sms": {"sent": False, "reason": "render_error", "error": str(exc)}}
+        err = {"sent": False, "reason": "render_error", "error": str(exc)}
+        return {"email": err, "whatsapp": err}
 
     if email_addr:
         try:
@@ -279,11 +371,15 @@ async def send_payment_receipt(order: dict[str, Any]) -> dict:
 
     if phone:
         try:
-            result["sms"] = await send_sms_async(phone, render_sms_text(order))
+            result["whatsapp"] = await send_whatsapp_async(
+                phone,
+                settings.whatsapp_template_name,
+                render_whatsapp_params(order),
+            )
         except Exception as exc:
-            logger.exception("Unexpected SMS send error")
-            result["sms"] = {"sent": False, "reason": "unexpected_error", "error": str(exc)}
+            logger.exception("Unexpected WhatsApp send error")
+            result["whatsapp"] = {"sent": False, "reason": "unexpected_error", "error": str(exc)}
     else:
-        result["sms"] = {"sent": False, "reason": "no_phone_number"}
+        result["whatsapp"] = {"sent": False, "reason": "no_phone_number"}
 
     return result

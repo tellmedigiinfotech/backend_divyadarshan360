@@ -72,17 +72,40 @@ Setup (one-time, in the Gmail account):
 
 > The App Password is **not** your Gmail login. Trying to use the regular password gets you a 535 "Username and Password not accepted" error from Google. If you ever see that error in `firebase functions:log`, regenerate the App Password and update the env var.
 
-**SMS Striker** — same creds the legacy backend uses for OTP. Set in `.env`:
+**WhatsApp via Meta Cloud API** — official Graph API, free for the first 1 000 conversations/month. Set in `.env`:
 ```
-SMS_STRIKER_USERNAME=<your username>
-SMS_STRIKER_PASSWORD=<your password>
-SMS_STRIKER_CHANNEL=<your DLT-approved sender id>
-SMS_STRIKER_ORDER_TEMPLATE_ID=<DLT template id for order confirmation>
+WHATSAPP_ACCESS_TOKEN=EAAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+WHATSAPP_PHONE_NUMBER_ID=1234567890123456
+WHATSAPP_TEMPLATE_NAME=order_confirmation
+WHATSAPP_TEMPLATE_LANGUAGE=en
 ```
 
-> **DLT note**: Indian telcos require every transactional SMS to use a pre-registered template id. The OTP template id `1407162495551105851` is for OTPs only — register a separate template for order-confirmation text under your DLT portal and put its id in `SMS_STRIKER_ORDER_TEMPLATE_ID`. The template text the system sends is: `"Divya Darshan 360: Payment of Rs.{amount} received for {item}. Order #{short_id}. Ships within 24h. Help: {phone}"`.
+One-time setup in Meta Business Manager:
+1. **developers.facebook.com → Create App → Business → Add the WhatsApp product.**
+2. **API Setup** tab → add a phone number (or use the test number Meta gives you for the first ~250 sends). Copy the **Phone Number ID** (long numeric, NOT the phone itself).
+3. **WhatsApp → Configuration → Permanent token** → create a System User in Business Settings → grant it WhatsApp Business Management + WhatsApp Business Messaging permissions → generate a token that never expires. Copy.
+4. **Message Templates → Create template → Category: TRANSACTIONAL → Name: `order_confirmation` → Language: English → Body**:
 
-If either set of creds is missing, that channel is skipped (logged with `reason: smtp_not_configured` or `sms_not_configured`). The other channel still tries.
+```
+Namaste {{1}} 🙏
+
+Your order *{{2}}* is confirmed.
+
+Item: {{4}}
+Amount paid: ₹{{3}}
+
+Ships within 24 hours. We'll send tracking once dispatched.
+
+— Divya Darshan 360
+```
+
+Submit. Approval is usually under an hour for transactional templates.
+
+> The 4 placeholders map to: `{{1}}=customer name`, `{{2}}=Razorpay order id`, `{{3}}=amount in ₹`, `{{4}}=item name`. The code's `render_whatsapp_params()` produces them in this order. If you reorder them in your registered template, update that function to match.
+
+> Until approval, sends will return HTTP 400 with Meta error code 132001 ("Template name does not exist") and the result in Firestore will show `whatsapp_http_error` — that's expected. Email keeps working independently.
+
+The legacy SMS Striker code path stays in `notifications.py` for future use but is no longer wired into the orchestrator.
 
 ### Authentication
 

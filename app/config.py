@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     sms_striker_order_template_id: str | None = None
     sms_striker_url: str = "https://www.smsstriker.com/API/sms.php"
 
+    # WhatsApp via Meta Cloud API (Graph API).
+    # Setup: developers.facebook.com -> create app -> WhatsApp product ->
+    # copy Phone Number ID + a permanent access token. Register an
+    # `order_confirmation` template with 4 body placeholders.
+    whatsapp_access_token: str | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_template_name: str = "order_confirmation"
+    whatsapp_template_language: str = "en"
+    whatsapp_graph_version: str = "v22.0"
+
     merchant_support_email: str = "connect@youtellme.ai"
     merchant_support_phone: str = "+91 90499 21850"
 
