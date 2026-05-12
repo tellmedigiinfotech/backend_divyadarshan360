@@ -8,15 +8,15 @@ must return 200 to Razorpay even when a notification side-effect fails.
 from __future__ import annotations
 
 import logging
+from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Any
 
+import aiosmtplib
 import httpx
 from jinja2 import Template
 
 from .config import settings
-
-
-RESEND_API_URL = "https://api.resend.com/emails"
 
 
 logger = logging.getLogger(__name__)
@@ -157,52 +157,41 @@ def render_receipt(order: dict[str, Any]) -> tuple[str, str, str]:
 
 
 async def send_email_async(recipient: str, subject: str, html_body: str, text_body: str) -> dict:
-    """Send a transactional email via Resend (https://resend.com).
+    """Send a transactional email via SMTP (Gmail by default).
 
-    Returns {"sent": True, "id": "<resend message id>"} on success, or
-    {"sent": False, "reason": "..."} when the API key isn't set or the
-    request fails. Never raises — callers can ignore the result safely.
+    Auto-picks SSL (port 465) vs STARTTLS (port 587). Returns
+    {"sent": True} on success or {"sent": False, "reason": "..."} when
+    creds are missing or delivery fails. Never raises — callers can
+    ignore the result safely.
     """
-    if not settings.resend_api_key:
-        return {"sent": False, "reason": "resend_not_configured"}
+    if not settings.smtp_username or not settings.smtp_password:
+        return {"sent": False, "reason": "smtp_not_configured"}
 
-    payload = {
-        "from": settings.resend_from,
-        "to": [recipient],
-        "subject": subject,
-        "html": html_body,
-        "text": text_body,
-    }
+    message = EmailMessage()
+    message["From"] = formataddr((settings.smtp_from_name, settings.smtp_username))
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(text_body)
+    message.add_alternative(html_body, subtype="html")
 
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            res = await client.post(
-                RESEND_API_URL,
-                headers={
-                    "Authorization": f"Bearer {settings.resend_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-    except Exception as exc:
-        logger.exception("Resend request failed for %s", recipient)
-        return {"sent": False, "reason": "resend_network_error", "error": str(exc)}
-
-    if res.status_code != 200:
-        body_snip = (res.text or "")[:300]
-        logger.warning("Resend non-200 (status=%s body=%s)", res.status_code, body_snip)
-        return {
-            "sent": False,
-            "reason": "resend_http_error",
-            "status": res.status_code,
-            "body": body_snip,
-        }
+    use_tls = settings.smtp_port == 465
+    start_tls = settings.smtp_port == 587
 
     try:
-        body = res.json()
-        return {"sent": True, "id": body.get("id")}
-    except Exception:
+        await aiosmtplib.send(
+            message,
+            hostname=settings.smtp_server,
+            port=settings.smtp_port,
+            username=settings.smtp_username,
+            password=settings.smtp_password,
+            use_tls=use_tls,
+            start_tls=start_tls,
+            timeout=30,
+        )
         return {"sent": True}
+    except Exception as exc:
+        logger.exception("send_email_async failed for %s", recipient)
+        return {"sent": False, "reason": "smtp_error", "error": str(exc)}
 
 
 def _strip_e164(phone: str) -> str:

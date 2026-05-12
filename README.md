@@ -58,15 +58,19 @@ The handler writes to:
 
 After `payment.captured` (and `order.paid`), the webhook fires a transactional receipt to both the customer's email and phone. Idempotent via `notified_at` on the order doc — Razorpay retries (or duplicate events) won't double-send. Failures are logged and stored in `notification_result` but never block the webhook from returning 200.
 
-**Email via Resend** — `https://resend.com`. 3 000 emails/month free, 100/day. Set in `.env`:
-```
-RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
-RESEND_FROM=Divya Darshan 360 <noreply@divyadarshan360.com>
-```
-Steps:
-1. Sign up at resend.com → API Keys → create a key.
-2. Domains → Add `divyadarshan360.com` → Resend shows you SPF + DKIM + DMARC DNS records → add them to your domain registrar → wait for "verified" status (usually a few minutes).
-3. Until your domain is verified, leave `RESEND_FROM` as the default (`onboarding@resend.dev`). That sandbox sender can only deliver to your Resend account's email — fine for testing, not for real customers.
+**Email via Gmail SMTP** — sender: `team.divyadarshan@gmail.com`. Gmail allows ~500 emails/day from a personal account, enough for v1 order volume.
+
+Setup (one-time, in the Gmail account):
+1. https://myaccount.google.com/security → enable **2-Step Verification**.
+2. https://myaccount.google.com/apppasswords → create an App Password named "Divya Darshan backend" → copy the 16-character code Google shows you.
+3. Add to `.env`:
+   ```
+   SMTP_USERNAME=team.divyadarshan@gmail.com
+   SMTP_PASSWORD=xxxxxxxxxxxxxxxx
+   ```
+   Server defaults are `smtp.gmail.com:465` (SSL on connect). No other config needed.
+
+> The App Password is **not** your Gmail login. Trying to use the regular password gets you a 535 "Username and Password not accepted" error from Google. If you ever see that error in `firebase functions:log`, regenerate the App Password and update the env var.
 
 **SMS Striker** — same creds the legacy backend uses for OTP. Set in `.env`:
 ```

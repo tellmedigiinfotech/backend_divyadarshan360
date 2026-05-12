@@ -28,11 +28,13 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str | None = None
     receipt_prefix: str = "DD360"
 
-    # Resend (https://resend.com). The from address must be on a verified
-    # domain you control, or use "onboarding@resend.dev" for early testing
-    # (their sandbox sender, can only deliver to your account's email).
-    resend_api_key: str | None = None
-    resend_from: str = "Divya Darshan 360 <onboarding@resend.dev>"
+    # Gmail SMTP. Requires a Google App Password (NOT the regular login):
+    # https://myaccount.google.com/apppasswords (needs 2-Step Verification on).
+    smtp_server: str = "smtp.gmail.com"
+    smtp_port: int = 465  # 465=SSL on connect, 587=STARTTLS
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_name: str = "Divya Darshan 360"
 
     sms_striker_username: str | None = None
     sms_striker_password: str | None = None
