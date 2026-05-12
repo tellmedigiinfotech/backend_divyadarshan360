@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8001
 
-    allowed_origins: Annotated[list[str], Field(default_factory=lambda: ["*"])]
+    # NoDecode keeps pydantic-settings from JSON-parsing the env value, so the
+    # @field_validator below can split a plain `a,b,c` string. Without NoDecode,
+    # pydantic-settings v2 tries json.loads() first and errors before the
+    # validator runs.
+    allowed_origins: Annotated[list[str], NoDecode, Field(default_factory=lambda: ["*"])]
 
     razorpay_key_id: str
     razorpay_key_secret: str
