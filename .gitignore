@@ -5,8 +5,9 @@
 service-account.json
 *-service-account.json
 firebase-credentials.json
-*-divyadarshanweb-3c2d7-firebase-adminsdk-fbsvc-b8f0850f4b.json
-divyadarshanweb-3c2d7-firebase-adminsdk-fbsvc-b8f0850f4b.json
+*-firebase-adminsdk-*.json
+tellme360-*-firebase-adminsdk-*.json
+divyadarshanweb-*-firebase-adminsdk-*.json
 
 __pycache__/
 *.py[cod]

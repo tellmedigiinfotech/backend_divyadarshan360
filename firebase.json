@@ -11,7 +11,7 @@
         ".git",
         ".pytest_cache",
         "run_local.py",
-        "divyadarshanweb-3c2d7-firebase-adminsdk-fbsvc-b8f0850f4b.json",
+        "*-firebase-adminsdk-*.json",
         "service-account.json"
       ]
     }
