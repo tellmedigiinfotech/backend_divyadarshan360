@@ -15,5 +15,8 @@
         "service-account.json"
       ]
     }
-  ]
+  ],
+  "firestore": {
+    "indexes": "firestore.indexes.json"
+  }
 }
