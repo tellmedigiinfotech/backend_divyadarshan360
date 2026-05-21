@@ -8,6 +8,7 @@ firebase-credentials.json
 *-firebase-adminsdk-*.json
 tellme360-*-firebase-adminsdk-*.json
 divyadarshanweb-*-firebase-adminsdk-*.json
+tellme360-53eeb-firebase-adminsdk-fbsvc-9b39b8a79c.json
 
 __pycache__/
 *.py[cod]
