@@ -4,11 +4,18 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth as firebase_auth
 
+from .firebase import init_firebase
+
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def verify_firebase_token(token: str) -> dict:
+    # firebase_auth.verify_id_token() raises "default Firebase app does not
+    # exist" when initialize_app() hasn't been called yet. Inside Firebase
+    # Functions our FastAPI lifespan never runs (TestClient bridge skips it),
+    # so we init here lazily. init_firebase() is idempotent.
+    init_firebase()
     try:
         return firebase_auth.verify_id_token(token, check_revoked=False)
     except firebase_auth.ExpiredIdTokenError as exc:
