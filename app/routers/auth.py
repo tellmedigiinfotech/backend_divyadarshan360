@@ -3,7 +3,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from google.api_core import exceptions as gax_exceptions
-from google.cloud.firestore_v1.base_query import FieldFilter
 
 from ..auth import get_current_user
 from ..firebase import SERVER_TIMESTAMP, db
@@ -29,56 +28,43 @@ def _to_current_user(decoded: dict) -> CurrentUser:
 
 
 def resolve_or_create_customer(decoded: dict) -> tuple[str, dict]:
-    """Return (customer_doc_id, customer_data). Backfills firebase_uid on legacy docs."""
+    """Return (firebase_uid, user_data) reading users/{uid} in Firestore.
+
+    The mobile app stores user records at users/{firebase_auth_uid} with
+    camelCase fields (uid, phone, displayName, isGuest, createdAt, updatedAt).
+    We adopt the same collection so web and mobile share user records.
+
+    Creates the doc on first web sign-in (mirroring mobile's create shape).
+    """
     uid: str = decoded["uid"]
-    phone: str | None = decoded.get("phone_number")
-    name: str | None = decoded.get("name") or ""
-    email: str | None = decoded.get("email")
+    phone: str = decoded.get("phone_number") or ""
 
-    customers = db().collection("customers")
+    user_ref = db().collection("users").document(uid)
+    snap = user_ref.get()
 
-    by_uid = (
-        customers.where(filter=FieldFilter("firebase_uid", "==", uid)).limit(1).get()
-    )
-    if by_uid:
-        doc = by_uid[0]
-        return doc.id, doc.to_dict()
+    if snap.exists:
+        return uid, snap.to_dict() or {}
 
-    if phone:
-        by_phone = (
-            customers.where(filter=FieldFilter("phone", "==", phone)).limit(1).get()
-        )
-        if by_phone:
-            doc = by_phone[0]
-            doc.reference.set(
-                {"firebase_uid": uid, "updated_at": SERVER_TIMESTAMP},
-                merge=True,
-            )
-            data = doc.to_dict() or {}
-            data["firebase_uid"] = uid
-            return doc.id, data
-
-    new_ref = customers.document()
-    payload = {
-        "firebase_uid": uid,
-        "full_name": name,
-        "phone": phone or "",
-        "email": email,
-        "created_at": SERVER_TIMESTAMP,
-        "updated_at": SERVER_TIMESTAMP,
+    new_data = {
+        "uid": uid,
+        "phone": phone,
+        "displayName": phone,
+        "isGuest": False,
+        "createdAt": SERVER_TIMESTAMP,
+        "updatedAt": SERVER_TIMESTAMP,
     }
-    new_ref.set(payload)
-    return new_ref.id, payload
+    user_ref.set(new_data)
+    return uid, new_data
 
 
 def _customer_profile(customer_id: str, data: dict) -> CustomerProfile:
     return CustomerProfile(
         customer_id=customer_id,
-        full_name=data.get("full_name", "") or "",
+        full_name=(data.get("name") or data.get("displayName") or "").strip(),
         phone=data.get("phone", "") or "",
         email=data.get("email"),
-        firebase_uid=data.get("firebase_uid"),
-        last_shipping_address=data.get("last_shipping_address"),
+        firebase_uid=data.get("uid") or customer_id,
+        last_shipping_address=data.get("lastShippingAddress"),
     )
 
 

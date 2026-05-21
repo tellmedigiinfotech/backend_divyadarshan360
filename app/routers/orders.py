@@ -64,15 +64,21 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
 
 
 def _update_customer_from_form(customer_id: str, payload: CreateOrderInput) -> None:
+    """Merge web-checkout supplied info onto users/{uid}.
+
+    Uses camelCase to match the mobile app's existing user schema. Never
+    touches mobile-managed fields (uid, displayName, isGuest, createdAt,
+    phone) so concurrent mobile writes are safe.
+    """
     update: dict = {
-        "updated_at": SERVER_TIMESTAMP,
-        "last_shipping_address": payload.shipping_address.model_dump(),
+        "updatedAt": SERVER_TIMESTAMP,
+        "lastShippingAddress": payload.shipping_address.model_dump(),
     }
     if payload.customer.full_name:
-        update["full_name"] = payload.customer.full_name
+        update["name"] = payload.customer.full_name
     if payload.customer.email:
         update["email"] = payload.customer.email
-    db().collection("customers").document(customer_id).set(update, merge=True)
+    db().collection("users").document(customer_id).set(update, merge=True)
 
 
 @router.post("/create_order", response_model=CreateOrderOutput)

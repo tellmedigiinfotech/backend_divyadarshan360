@@ -58,17 +58,17 @@ def update_me(
     except gax_exceptions.PermissionDenied as exc:
         raise HTTPException(status_code=503, detail="Firestore not enabled or missing permission") from exc
 
-    update: dict = {"updated_at": SERVER_TIMESTAMP}
+    update: dict = {"updatedAt": SERVER_TIMESTAMP}
     if payload.full_name is not None:
-        update["full_name"] = payload.full_name
+        update["name"] = payload.full_name
     if payload.email is not None:
         update["email"] = payload.email
     if payload.last_shipping_address is not None:
-        update["last_shipping_address"] = payload.last_shipping_address.model_dump()
+        update["lastShippingAddress"] = payload.last_shipping_address.model_dump()
 
-    customer_ref = db().collection("customers").document(customer_id)
-    customer_ref.set(update, merge=True)
-    snap = customer_ref.get()
+    user_ref = db().collection("users").document(customer_id)
+    user_ref.set(update, merge=True)
+    snap = user_ref.get()
     return _customer_profile(customer_id, snap.to_dict() or {})
 
 
