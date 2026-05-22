@@ -1,6 +1,7 @@
 import logging
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,8 +17,12 @@ from ..schemas.order import (
     CreateOrderOutput,
     OrderCustomerView,
     OrderItemView,
+    OrderPayer,
     OrderStatus,
+    OrderStatusOutput,
     OrderView,
+    SmartCollectCreateInput,
+    SmartCollectCreateOutput,
     VerifyPaymentInput,
     VerifyPaymentOutput,
 )
@@ -301,3 +306,152 @@ def get_order(
     data = snap.to_dict() or {}
     _assert_order_ownership(data, decoded)
     return _doc_to_order_view(razorpay_order_id, data)
+
+
+# --- Smart Collect (UPI virtual account) flow ---
+
+
+def _make_reference() -> str:
+    """Short customer-typeable reference, e.g. DD360-A7K2N9."""
+    return f"{settings.receipt_prefix}-{secrets.token_hex(3).upper()}"
+
+
+def _format_amount_display(amount_paise: int) -> str:
+    if amount_paise % 100 == 0:
+        return str(amount_paise // 100)
+    return f"{amount_paise / 100:.2f}"
+
+
+@router.post("/create_smart_collect", response_model=SmartCollectCreateOutput)
+def create_smart_collect(
+    payload: SmartCollectCreateInput,
+    decoded: Annotated[dict, Depends(get_current_user)],
+) -> SmartCollectCreateOutput:
+    """Create an `awaiting_payment` order for the UPI/bank-transfer flow.
+
+    No Razorpay API call is made here. The customer pays directly to the
+    Razorpay-issued virtual account; the razorpay_webhook later matches
+    the incoming payment against this order using the reference / phone /
+    name strategies.
+    """
+    product = get_product(payload.item.sku)
+    if product is None:
+        raise HTTPException(status_code=404, detail=f"Unknown product sku: {payload.item.sku}")
+    if payload.item.quantity > product.max_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Quantity exceeds the per-order limit of {product.max_quantity}.",
+        )
+
+    amount_paise = product.unit_price_paise * payload.item.quantity
+    reference = _make_reference()
+
+    try:
+        customer_id, _ = resolve_or_create_customer(decoded)
+        _update_customer_from_form(customer_id, payload)
+    except gax_exceptions.PermissionDenied as exc:
+        logger.exception("Firestore permission denied")
+        raise HTTPException(status_code=503, detail="Firestore not enabled / missing permission") from exc
+    except gax_exceptions.GoogleAPIError as exc:
+        logger.exception("Firestore error")
+        raise HTTPException(status_code=503, detail=f"Firestore error: {exc}") from exc
+
+    token_phone = decoded.get("phone_number") or payload.customer.phone
+
+    expires_at_dt = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.smart_collect_order_expiry_minutes
+    )
+
+    new_ref = db().collection("orders").document()
+    order_doc = {
+        "razorpay_order_id": None,
+        "reference": reference,
+        "status": OrderStatus.awaiting_payment.value,
+        "amount": amount_paise,
+        "amount_paid": 0,
+        "currency": product.currency,
+        "item": {
+            "sku": product.sku,
+            "name": product.name,
+            "quantity": payload.item.quantity,
+            "unit_price_paise": product.unit_price_paise,
+            "line_total_paise": amount_paise,
+        },
+        "customer": {
+            "full_name": payload.customer.full_name,
+            "phone": token_phone,
+            "email": payload.customer.email,
+        },
+        "customer_id": customer_id,
+        "firebase_uid": decoded["uid"],
+        "shipping_address": payload.shipping_address.model_dump(),
+        "payment_method": "smart_collect",
+        "created_at": SERVER_TIMESTAMP,
+        "updated_at": SERVER_TIMESTAMP,
+        "expires_at": expires_at_dt,
+        "paid_at": None,
+    }
+    new_ref.set(order_doc)
+
+    return SmartCollectCreateOutput(
+        order_id=new_ref.id,
+        reference=reference,
+        amount_paise=amount_paise,
+        amount_display=_format_amount_display(amount_paise),
+        currency=product.currency,
+        upi_id=settings.smart_collect_upi_id,
+        account_number=settings.smart_collect_account_number,
+        ifsc=settings.smart_collect_ifsc,
+        beneficiary_name=settings.smart_collect_beneficiary,
+        expires_at_iso=expires_at_dt.isoformat(),
+    )
+
+
+@router.get("/{order_id}/status", response_model=OrderStatusOutput)
+def get_order_status(
+    order_id: str,
+    decoded: Annotated[dict, Depends(get_current_user)],
+) -> OrderStatusOutput:
+    """Lightweight polling endpoint for the pay-instructions page.
+
+    Returns both the dynamic status (paid? still waiting?) and the static
+    UPI/account info the page renders, so the client can render entirely
+    from one fetch + poll.
+    """
+    snap = db().collection("orders").document(order_id).get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Order not found")
+    data = snap.to_dict() or {}
+    _assert_order_ownership(data, decoded)
+
+    amount_paise = int(data.get("amount", 0))
+    payer_data = data.get("payer") or {}
+    payer = OrderPayer(
+        name=payer_data.get("name"),
+        vpa=payer_data.get("vpa"),
+        method=payer_data.get("method"),
+    ) if payer_data else None
+
+    expires_at = data.get("expires_at")
+    expires_at_iso = None
+    if expires_at is not None:
+        try:
+            expires_at_iso = expires_at.isoformat() if hasattr(expires_at, "isoformat") else str(expires_at)
+        except Exception:
+            expires_at_iso = str(expires_at)
+
+    return OrderStatusOutput(
+        order_id=order_id,
+        status=OrderStatus(data.get("status", "awaiting_payment")),
+        amount_paise=amount_paise,
+        amount_display=_format_amount_display(amount_paise),
+        currency=data.get("currency", "INR"),
+        reference=data.get("reference"),
+        upi_id=settings.smart_collect_upi_id,
+        account_number=settings.smart_collect_account_number,
+        ifsc=settings.smart_collect_ifsc,
+        beneficiary_name=settings.smart_collect_beneficiary,
+        paid_at=str(data.get("paid_at")) if data.get("paid_at") else None,
+        payer=payer,
+        expires_at_iso=expires_at_iso,
+    )

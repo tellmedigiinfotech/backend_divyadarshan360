@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     merchant_support_email: str = "connect@youtellme.ai"
     merchant_support_phone: str = "+91 90499 21850"
 
+    # Razorpay Smart Collect (virtual account) payee details shown to customers
+    # when they pay via direct UPI/bank transfer outside the standard checkout
+    # modal. These match the assigned values from the Razorpay dashboard.
+    smart_collect_upi_id: str = "rpy.payto000009179099666@icici"
+    smart_collect_account_number: str = "2223006306876848"
+    smart_collect_ifsc: str = "UTIB000RAZP"
+    smart_collect_beneficiary: str = "TELLME DIGIINFOTECH PRIVATE LIMITED"
+    smart_collect_order_expiry_minutes: int = 30
+
     # Firebase reserves env vars beginning with FIREBASE_/X_GOOGLE_/EXT_ in
     # Cloud Functions, so we use neutral SERVICE_ACCOUNT_* names instead.
     service_account_path: str | None = None

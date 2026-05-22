@@ -7,9 +7,11 @@ from .customer import CustomerInput, ShippingAddressInput
 
 
 class OrderStatus(str, Enum):
+    awaiting_payment = "awaiting_payment"
     created = "created"
     paid = "paid"
     failed = "failed"
+    expired = "expired"
 
 
 class CartLineInput(BaseModel):
@@ -73,3 +75,47 @@ class OrderView(BaseModel):
     shipping_address: ShippingAddressInput
     created_at: str | None = None
     paid_at: str | None = None
+
+
+# --- Smart Collect (UPI virtual account) flow ---
+
+
+class SmartCollectCreateInput(BaseModel):
+    item: CartLineInput
+    customer: CustomerInput
+    shipping_address: ShippingAddressInput
+
+
+class SmartCollectCreateOutput(BaseModel):
+    order_id: str
+    reference: str
+    amount_paise: int
+    amount_display: str
+    currency: str
+    upi_id: str
+    account_number: str
+    ifsc: str
+    beneficiary_name: str
+    expires_at_iso: str | None = None
+
+
+class OrderPayer(BaseModel):
+    name: str | None = None
+    vpa: str | None = None
+    method: str | None = None
+
+
+class OrderStatusOutput(BaseModel):
+    order_id: str
+    status: OrderStatus
+    amount_paise: int
+    amount_display: str
+    currency: str
+    reference: str | None = None
+    upi_id: str | None = None
+    account_number: str | None = None
+    ifsc: str | None = None
+    beneficiary_name: str | None = None
+    paid_at: str | None = None
+    payer: OrderPayer | None = None
+    expires_at_iso: str | None = None
