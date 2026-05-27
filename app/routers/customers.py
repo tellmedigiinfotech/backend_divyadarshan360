@@ -108,8 +108,21 @@ def list_my_orders(
                 currency=data.get("currency", "INR"),
                 product_name=item.get("name", ""),
                 quantity=int(item.get("quantity", 1)),
-                created_at=str(data.get("created_at")) if data.get("created_at") else None,
-                paid_at=str(data.get("paid_at")) if data.get("paid_at") else None,
+                created_at=_ts_to_iso(data.get("created_at")),
+                paid_at=_ts_to_iso(data.get("paid_at")),
             )
         )
     return out
+
+
+def _ts_to_iso(value) -> str | None:
+    """Normalize Firestore Timestamp / DatetimeWithNanoseconds / SERVER_TIMESTAMP
+    sentinel to an ISO-8601 string the frontend can pass to new Date(...)."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)

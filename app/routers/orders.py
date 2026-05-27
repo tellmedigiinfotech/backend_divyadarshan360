@@ -63,10 +63,21 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
             email=customer.get("email"),
         ),
         shipping_address=shipping,
-        created_at=str(data.get("created_at")) if data.get("created_at") else None,
-        paid_at=str(data.get("paid_at")) if data.get("paid_at") else None,
+        created_at=_ts_to_iso(data.get("created_at")),
+        paid_at=_ts_to_iso(data.get("paid_at")),
         razorpay_key_id=settings.razorpay_key_id,
     )
+
+
+def _ts_to_iso(value) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
 
 
 def _update_customer_from_form(customer_id: str, payload: CreateOrderInput) -> None:
