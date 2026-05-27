@@ -65,6 +65,7 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
         shipping_address=shipping,
         created_at=str(data.get("created_at")) if data.get("created_at") else None,
         paid_at=str(data.get("paid_at")) if data.get("paid_at") else None,
+        razorpay_key_id=settings.razorpay_key_id,
     )
 
 

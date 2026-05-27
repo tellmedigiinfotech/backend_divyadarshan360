@@ -75,6 +75,9 @@ class OrderView(BaseModel):
     shipping_address: ShippingAddressInput
     created_at: str | None = None
     paid_at: str | None = None
+    # Sent so the /account "Continue payment" button can re-open the Razorpay
+    # modal for a pending order without making the backend roundtrip again.
+    razorpay_key_id: str | None = None
 
 
 # --- Smart Collect (UPI virtual account) flow ---
