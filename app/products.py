@@ -16,10 +16,8 @@ CATALOG: dict[str, Product] = {
         sku="mobile-vr-box",
         name="Mobile VR Box",
         description="Cardboard-style universal mobile VR headset for Divya Darshan 360.",
-        # TEMP: lowered to Rs.10 for a live Razorpay test. Revert to 59900
-        # (Rs.599) once the live test is verified + refunded.
-        unit_price_paise=1000,
-        mrp_paise=1500,
+        unit_price_paise=69900,
+        mrp_paise=99900,
         currency="INR",
         max_quantity=10,
     ),
