@@ -1,7 +1,6 @@
-import hmac as _hmac
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth as firebase_auth
 
@@ -49,31 +48,22 @@ def get_optional_user(
 
 
 def require_admin(
-    request: Request,
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> dict:
-    """Gate /admin/* endpoints. Accepts either:
-
-    1. An `X-Admin-Password` header matching settings.admin_password
-       (the primary shared-password flow used by /admin/login), OR
-    2. A Firebase Bearer token whose verified email/phone is in
-       ADMIN_EMAILS / ADMIN_PHONES (kept as a fallback in case email-
-       or Google-sign-in is added later).
+    """Gate /admin/* endpoints. Only Firebase users whose verified phone or
+    email is in ADMIN_PHONES / ADMIN_EMAILS may access. Everyone else —
+    including unauthenticated callers — gets a 404 so the route's existence
+    is not advertised.
     """
-    # Path 1: shared admin password header
-    pw = request.headers.get("x-admin-password")
-    if pw and settings.admin_password and _hmac.compare_digest(pw, settings.admin_password):
-        return {"uid": "admin-shared", "email": None, "phone_number": None, "via": "password"}
-
-    # Path 2: Firebase token + email/phone allowlist
     if creds is not None and creds.credentials:
-        decoded = verify_firebase_token(creds.credentials)
-        email = (decoded.get("email") or "").strip().lower()
-        phone = (decoded.get("phone_number") or "").strip()
-        allowed_emails = {e.strip().lower() for e in settings.admin_emails if e.strip()}
-        allowed_phones = {p.strip() for p in settings.admin_phones if p.strip()}
-        if (email and email in allowed_emails) or (phone and phone in allowed_phones):
-            decoded["via"] = "firebase"
-            return decoded
-
-    raise HTTPException(status_code=403, detail="Admin access required")
+        try:
+            decoded = verify_firebase_token(creds.credentials)
+            phone = (decoded.get("phone_number") or "").strip()
+            email = (decoded.get("email") or "").strip().lower()
+            allowed_phones = {p.strip() for p in settings.admin_phones if p.strip()}
+            allowed_emails = {e.strip().lower() for e in settings.admin_emails if e.strip()}
+            if (phone and phone in allowed_phones) or (email and email in allowed_emails):
+                return decoded
+        except HTTPException:
+            pass  # bad token → treat the same as no token: 404
+    raise HTTPException(status_code=404, detail="Not Found")

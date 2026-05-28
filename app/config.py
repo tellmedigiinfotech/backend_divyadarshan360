@@ -28,13 +28,9 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str | None = None
     receipt_prefix: str = "DD360"
 
-    # Shared admin password. Frontend sends it as `X-Admin-Password` after
-    # a one-time prompt at /admin/login; the value is kept in the browser's
-    # sessionStorage so it clears when the tab closes.
-    admin_password: str | None = None
-
-    # Optional fallback allowlists (Firebase token-based). Useful if you ever
-    # add Google/email-link sign-in later — leave empty to disable.
+    # Admin allowlists. A signed-in Firebase user whose verified phone_number
+    # is in ADMIN_PHONES (E.164, e.g. +919049921850) — or whose email is in
+    # ADMIN_EMAILS — may access /admin. Everyone else gets a 404.
     admin_emails: Annotated[list[str], NoDecode, Field(default_factory=list)]
     admin_phones: Annotated[list[str], NoDecode, Field(default_factory=list)]
 
