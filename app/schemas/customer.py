@@ -70,3 +70,7 @@ class CustomerOrderListItem(BaseModel):
     quantity: int
     created_at: str | None = None
     paid_at: str | None = None
+    fulfillment_status: str | None = None
+    tracking_number: str | None = None
+    courier: str | None = None
+    shipped_at: str | None = None

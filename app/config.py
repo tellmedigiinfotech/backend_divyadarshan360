@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str | None = None
     receipt_prefix: str = "DD360"
 
+    # Comma-separated allowlists for /admin. A user is granted admin access
+    # if their verified Firebase token email OR phone_number matches one of
+    # these. Phones must be in E.164 (e.g. +919049921850).
+    admin_emails: Annotated[list[str], NoDecode, Field(default_factory=list)]
+    admin_phones: Annotated[list[str], NoDecode, Field(default_factory=list)]
+
     # Gmail SMTP. Requires a Google App Password (NOT the regular login):
     # https://myaccount.google.com/apppasswords (needs 2-Step Verification on).
     smtp_server: str = "smtp.gmail.com"
@@ -69,9 +75,9 @@ class Settings(BaseSettings):
     service_account_path: str | None = None
     service_account_json: str | None = None
 
-    @field_validator("allowed_origins", mode="before")
+    @field_validator("allowed_origins", "admin_emails", "admin_phones", mode="before")
     @classmethod
-    def _split_origins(cls, value):
+    def _split_csv(cls, value):
         if isinstance(value, str):
             return [o.strip() for o in value.split(",") if o.strip()]
         return value

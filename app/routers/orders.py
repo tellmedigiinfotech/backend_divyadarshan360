@@ -66,6 +66,12 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
         created_at=_ts_to_iso(data.get("created_at")),
         paid_at=_ts_to_iso(data.get("paid_at")),
         razorpay_key_id=settings.razorpay_key_id,
+        fulfillment_status=data.get("fulfillment_status"),
+        tracking_number=data.get("tracking_number"),
+        courier=data.get("courier"),
+        shipped_at=_ts_to_iso(data.get("shipped_at")),
+        delivered_at=_ts_to_iso(data.get("delivered_at")),
+        admin_notes=data.get("admin_notes"),
     )
 
 

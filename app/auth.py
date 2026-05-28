@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth as firebase_auth
 
+from .config import settings
 from .firebase import init_firebase
 
 
@@ -44,3 +45,20 @@ def get_optional_user(
     if creds is None or not creds.credentials:
         return None
     return verify_firebase_token(creds.credentials)
+
+
+def require_admin(decoded: Annotated[dict, Depends(get_current_user)]) -> dict:
+    """Gate /admin/* endpoints. Matches the verified token email OR phone
+    against the comma-separated allowlists in settings (ADMIN_EMAILS /
+    ADMIN_PHONES). Either match is sufficient — so an admin who signs in
+    by phone OTP can be allowlisted by phone without needing email auth.
+    """
+    email = (decoded.get("email") or "").strip().lower()
+    phone = (decoded.get("phone_number") or "").strip()
+
+    allowed_emails = {e.strip().lower() for e in settings.admin_emails if e.strip()}
+    allowed_phones = {p.strip() for p in settings.admin_phones if p.strip()}
+
+    if (email and email in allowed_emails) or (phone and phone in allowed_phones):
+        return decoded
+    raise HTTPException(status_code=403, detail="Admin access required")

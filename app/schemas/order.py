@@ -78,6 +78,12 @@ class OrderView(BaseModel):
     # Sent so the /account "Continue payment" button can re-open the Razorpay
     # modal for a pending order without making the backend roundtrip again.
     razorpay_key_id: str | None = None
+    fulfillment_status: str | None = None
+    tracking_number: str | None = None
+    courier: str | None = None
+    shipped_at: str | None = None
+    delivered_at: str | None = None
+    admin_notes: str | None = None
 
 
 # --- Smart Collect (UPI virtual account) flow ---
@@ -106,6 +112,41 @@ class OrderPayer(BaseModel):
     name: str | None = None
     vpa: str | None = None
     method: str | None = None
+
+
+# --- Admin schemas ---
+
+
+class AdminOrderListItem(BaseModel):
+    razorpay_order_id: str
+    receipt: str
+    status: str
+    fulfillment_status: str | None = None
+    amount: int
+    amount_paid: int
+    currency: str
+    product_name: str
+    quantity: int
+    customer_name: str
+    customer_phone: str
+    customer_email: str | None = None
+    city: str | None = None
+    pincode: str | None = None
+    tracking_number: str | None = None
+    courier: str | None = None
+    created_at: str | None = None
+    paid_at: str | None = None
+    shipped_at: str | None = None
+
+
+class AdminShipOrderInput(BaseModel):
+    tracking_number: Annotated[str, Field(min_length=2, max_length=80)]
+    courier: Annotated[str, Field(min_length=2, max_length=80)]
+    notes: Annotated[str | None, Field(default=None, max_length=500)] = None
+
+
+class AdminMarkDeliveredInput(BaseModel):
+    notes: Annotated[str | None, Field(default=None, max_length=500)] = None
 
 
 class OrderStatusOutput(BaseModel):

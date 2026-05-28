@@ -110,6 +110,10 @@ def list_my_orders(
                 quantity=int(item.get("quantity", 1)),
                 created_at=_ts_to_iso(data.get("created_at")),
                 paid_at=_ts_to_iso(data.get("paid_at")),
+                fulfillment_status=data.get("fulfillment_status"),
+                tracking_number=data.get("tracking_number"),
+                courier=data.get("courier"),
+                shipped_at=_ts_to_iso(data.get("shipped_at")),
             )
         )
     return out
