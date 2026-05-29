@@ -13,6 +13,7 @@ class OrderStatus(str, Enum):
     failed = "failed"
     expired = "expired"
     cod_pending = "cod_pending"
+    refunded = "refunded"
 
 
 class CartLineInput(BaseModel):
@@ -100,6 +101,12 @@ class OrderView(BaseModel):
     delivered_at: str | None = None
     admin_notes: str | None = None
     payment_method: str | None = None
+    razorpay_payment_id: str | None = None
+    refund_id: str | None = None
+    refund_amount: int | None = None
+    refund_status: str | None = None
+    refunded_at: str | None = None
+    refund_reason: str | None = None
 
 
 # --- Smart Collect (UPI virtual account) flow ---
@@ -164,6 +171,13 @@ class AdminShipOrderInput(BaseModel):
 
 class AdminMarkDeliveredInput(BaseModel):
     notes: Annotated[str | None, Field(default=None, max_length=500)] = None
+
+
+class AdminRefundOrderInput(BaseModel):
+    # amount_paise None = full refund. Allow partial down to Re 1 (100 paise).
+    amount_paise: Annotated[int | None, Field(default=None, ge=100)] = None
+    reason: Annotated[str, Field(min_length=2, max_length=500)]
+    instant: bool = False
 
 
 class OrderStatusOutput(BaseModel):

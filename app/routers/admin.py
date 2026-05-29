@@ -5,11 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from google.api_core import exceptions as gax_exceptions
 from google.cloud import firestore as firestore_module
 
+from .. import razorpay_utils
 from ..auth import require_admin
 from ..firebase import SERVER_TIMESTAMP, db
 from ..schemas.order import (
     AdminMarkDeliveredInput,
     AdminOrderListItem,
+    AdminRefundOrderInput,
     AdminShipOrderInput,
     OrderView,
 )
@@ -155,4 +157,99 @@ def mark_delivered(
     if payload.notes:
         update["admin_notes"] = payload.notes.strip()
     ref.set(update, merge=True)
+    return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))
+
+
+@router.post("/orders/{order_id}/refund", response_model=OrderView)
+def refund_order(
+    order_id: str,
+    payload: AdminRefundOrderInput,
+    decoded: Annotated[dict, Depends(require_admin)],
+) -> OrderView:
+    """Issue a Razorpay refund and mark the order refunded.
+
+    - Razorpay-paid orders: calls the Razorpay refund API. `amount_paise=None`
+      issues a full refund of the captured amount. Partial refunds keep
+      status `paid` but record refund metadata; full refunds flip status to
+      `refunded`.
+    - COD orders (no razorpay_payment_id): rejected with 400 — cash refunds
+      happen offline.
+    """
+    ref = db().collection("orders").document(order_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Order not found")
+    data = snap.to_dict() or {}
+
+    if data.get("status") == "refunded":
+        raise HTTPException(status_code=400, detail="Order is already refunded")
+    if data.get("status") != "paid":
+        raise HTTPException(status_code=400, detail="Only paid orders can be refunded")
+    payment_id = data.get("razorpay_payment_id")
+    if not payment_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No Razorpay payment on this order — refund cash offline.",
+        )
+
+    captured_amount = int(data.get("amount_paid") or data.get("amount") or 0)
+    refund_amount = int(payload.amount_paise) if payload.amount_paise else captured_amount
+    if refund_amount > captured_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Refund amount ({refund_amount}) exceeds captured amount ({captured_amount})",
+        )
+
+    try:
+        rp_refund = razorpay_utils.refund_payment(
+            payment_id,
+            amount_paise=refund_amount,
+            notes={
+                "order_id": order_id,
+                "reason": payload.reason[:240],
+                "issued_by": decoded.get("email") or decoded.get("phone_number") or decoded["uid"],
+            },
+            speed="optimum" if payload.instant else "normal",
+        )
+    except Exception as exc:
+        logger.exception("Razorpay refund failed for order %s", order_id)
+        raise HTTPException(status_code=502, detail=f"Razorpay refund failed: {exc}") from exc
+
+    refund_id = rp_refund.get("id")
+    refund_status = rp_refund.get("status")
+    is_full_refund = refund_amount == captured_amount
+
+    # 1) Record in refunds/ collection (idempotent — refund_id is the doc id)
+    if refund_id:
+        db().collection("refunds").document(refund_id).set(
+            {
+                "refund_id": refund_id,
+                "razorpay_payment_id": payment_id,
+                "order_id": order_id,
+                "amount": refund_amount,
+                "currency": data.get("currency", "INR"),
+                "status": refund_status,
+                "reason": payload.reason.strip(),
+                "razorpay_refund_body": rp_refund,
+                "issued_by": decoded.get("email") or decoded.get("phone_number") or decoded["uid"],
+                "source": "admin",
+                "created_at": SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+
+    # 2) Update the order
+    update: dict = {
+        "refund_id": refund_id,
+        "refund_amount": refund_amount,
+        "refund_status": refund_status,
+        "refund_reason": payload.reason.strip(),
+        "refunded_at": SERVER_TIMESTAMP,
+        "refunded_by": decoded.get("email") or decoded.get("phone_number") or decoded["uid"],
+        "updated_at": SERVER_TIMESTAMP,
+    }
+    if is_full_refund:
+        update["status"] = "refunded"
+    ref.set(update, merge=True)
+
     return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))

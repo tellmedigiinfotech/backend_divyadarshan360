@@ -36,6 +36,23 @@ def fetch_payment(razorpay_payment_id: str) -> dict:
     return client.payment.fetch(razorpay_payment_id)
 
 
+def refund_payment(
+    razorpay_payment_id: str,
+    amount_paise: int | None = None,
+    notes: dict | None = None,
+    speed: str = "normal",
+) -> dict:
+    """Issue a refund. Passing amount_paise=None refunds the full captured
+    amount. speed='optimum' attempts an instant refund (subject to RBI
+    rules); 'normal' is the standard 5-7 business day refund."""
+    payload: dict = {"speed": speed}
+    if amount_paise is not None:
+        payload["amount"] = int(amount_paise)
+    if notes:
+        payload["notes"] = notes
+    return client.payment.refund(razorpay_payment_id, payload)
+
+
 def verify_webhook_signature(body: bytes, signature: str) -> bool:
     """Verify the X-Razorpay-Signature header against the webhook body using the
     project's webhook secret. Returns False if signature is missing or the

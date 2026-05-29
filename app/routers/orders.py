@@ -75,6 +75,12 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
         delivered_at=_ts_to_iso(data.get("delivered_at")),
         admin_notes=data.get("admin_notes"),
         payment_method=data.get("payment_method"),
+        razorpay_payment_id=data.get("razorpay_payment_id"),
+        refund_id=data.get("refund_id"),
+        refund_amount=data.get("refund_amount"),
+        refund_status=data.get("refund_status"),
+        refunded_at=_ts_to_iso(data.get("refunded_at")),
+        refund_reason=data.get("refund_reason"),
     )
 
 

@@ -251,6 +251,43 @@ def _handle_refund(payload: dict, event_id: str, event_type: str) -> None:
         merge=True,
     )
 
+    # Look up the order this refund belongs to (by razorpay_payment_id) and
+    # mirror the latest refund status onto it. When the refund is fully
+    # processed for the captured amount we also flip status to "refunded"
+    # so the admin dashboard and customer /account reflect it without
+    # depending on the admin-initiated code path having run.
+    try:
+        order_snaps = (
+            db()
+            .collection("orders")
+            .where("razorpay_payment_id", "==", payment_id)
+            .limit(1)
+            .get()
+        )
+    except Exception:
+        logger.exception("refund webhook: lookup by payment_id failed (event=%s)", event_id)
+        return
+
+    if not order_snaps:
+        return
+    order_snap = order_snaps[0]
+    order_data = order_snap.to_dict() or {}
+    captured = int(order_data.get("amount_paid") or order_data.get("amount") or 0)
+    refund_amount = int(refund.get("amount", 0))
+
+    update: dict = {
+        "refund_id": refund_id,
+        "refund_amount": refund_amount,
+        "refund_status": refund.get("status"),
+        "updated_at": SERVER_TIMESTAMP,
+    }
+    if refund.get("status") == "processed" and refund_amount >= captured and captured > 0:
+        update["status"] = "refunded"
+        if not order_data.get("refunded_at"):
+            update["refunded_at"] = SERVER_TIMESTAMP
+
+    order_snap.reference.set(update, merge=True)
+
 
 # --- Smart Collect (virtual account / UPI) flow ---
 
