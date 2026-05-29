@@ -17,7 +17,7 @@ CATALOG: dict[str, Product] = {
         name="Mobile VR Box",
         description="Cardboard-style universal mobile VR headset for Divya Darshan 360.",
         unit_price_paise=69900,
-        mrp_paise=99900,
+        mrp_paise=299900,
         currency="INR",
         max_quantity=10,
     ),
