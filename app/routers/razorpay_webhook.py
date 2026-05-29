@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from google.cloud import firestore as firestore_module
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from .. import razorpay_utils
+from .. import razorpay_utils, whatsapp
 from ..config import settings
 from ..firebase import SERVER_TIMESTAMP, db
 from ..notifications import send_payment_receipt
@@ -184,6 +184,21 @@ def _handle_payment_captured(payload: dict, event_id: str) -> None:
         },
         merge=True,
     )
+
+    # WhatsApp confirmation — only fire if the verify_payment path hasn't
+    # already done it for this order. Idempotency via whatsapp_confirmation_sent_at.
+    if not order_data.get("whatsapp_confirmation_sent_at"):
+        item = order_data.get("item") or {}
+        cust = order_data.get("customer") or {}
+        sent = whatsapp.send_order_confirmed(
+            phone=cust.get("phone") or "",
+            name=cust.get("full_name"),
+            order_id=order_data.get("receipt") or order_id,
+            item_text=f"{item.get('name', 'Mobile VR Box')} x {item.get('quantity', 1)}",
+            amount_rupees=paid_amount // 100,
+        )
+        if sent:
+            order_ref.set({"whatsapp_confirmation_sent_at": SERVER_TIMESTAMP}, merge=True)
 
 
 def _handle_payment_failed(payload: dict, event_id: str) -> None:

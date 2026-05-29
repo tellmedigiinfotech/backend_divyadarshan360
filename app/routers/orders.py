@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from google.api_core import exceptions as gax_exceptions
 
-from .. import razorpay_utils
+from .. import razorpay_utils, whatsapp
 from ..auth import get_current_user
 from ..config import settings
 from ..firebase import SERVER_TIMESTAMP, db
@@ -272,6 +272,16 @@ def create_cod_order(
     }
     new_ref.set(order_doc)
 
+    sent = whatsapp.send_cod_received(
+        phone=token_phone,
+        name=payload.customer.full_name,
+        order_id=receipt,
+        item_text=f"{product.name} x {payload.item.quantity}",
+        amount_rupees=amount_paise // 100,
+    )
+    if sent:
+        new_ref.set({"whatsapp_confirmation_sent_at": SERVER_TIMESTAMP}, merge=True)
+
     return CreateCodOrderOutput(
         order_id=new_ref.id,
         receipt=receipt,
@@ -388,6 +398,19 @@ def verify_payment(
         order_update["paid_at"] = SERVER_TIMESTAMP
         order_update["paid_via"] = "verify_payment"
     order_ref.set(order_update, merge=True)
+
+    if not already_paid and not order.get("whatsapp_confirmation_sent_at"):
+        item = order.get("item") or {}
+        cust = order.get("customer") or {}
+        sent = whatsapp.send_order_confirmed(
+            phone=cust.get("phone") or "",
+            name=cust.get("full_name"),
+            order_id=order.get("receipt") or payload.razorpay_order_id,
+            item_text=f"{item.get('name', 'Mobile VR Box')} x {item.get('quantity', 1)}",
+            amount_rupees=paid_amount // 100,
+        )
+        if sent:
+            order_ref.set({"whatsapp_confirmation_sent_at": SERVER_TIMESTAMP}, merge=True)
 
     return VerifyPaymentOutput(
         status=OrderStatus.paid,

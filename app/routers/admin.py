@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from google.api_core import exceptions as gax_exceptions
 from google.cloud import firestore as firestore_module
 
-from .. import razorpay_utils
+from .. import razorpay_utils, whatsapp
 from ..auth import require_admin
 from ..firebase import SERVER_TIMESTAMP, db
 from ..schemas.order import (
@@ -251,5 +251,14 @@ def refund_order(
     if is_full_refund:
         update["status"] = "refunded"
     ref.set(update, merge=True)
+
+    cust = data.get("customer") or {}
+    whatsapp.send_refund_processed(
+        phone=cust.get("phone") or "",
+        name=cust.get("full_name"),
+        order_id=data.get("receipt") or order_id,
+        amount_rupees=refund_amount // 100,
+        status=refund_status or "processed",
+    )
 
     return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))
