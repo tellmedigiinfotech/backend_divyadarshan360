@@ -114,6 +114,7 @@ def list_my_orders(
                 tracking_number=data.get("tracking_number"),
                 courier=data.get("courier"),
                 shipped_at=_ts_to_iso(data.get("shipped_at")),
+                payment_method=data.get("payment_method"),
             )
         )
     return out

@@ -13,6 +13,8 @@ from ..config import settings
 from ..firebase import SERVER_TIMESTAMP, db
 from ..products import get_product
 from ..schemas.order import (
+    CreateCodOrderInput,
+    CreateCodOrderOutput,
     CreateOrderInput,
     CreateOrderOutput,
     OrderCustomerView,
@@ -72,6 +74,7 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
         shipped_at=_ts_to_iso(data.get("shipped_at")),
         delivered_at=_ts_to_iso(data.get("delivered_at")),
         admin_notes=data.get("admin_notes"),
+        payment_method=data.get("payment_method"),
     )
 
 
@@ -192,6 +195,82 @@ def create_order(
         currency=product.currency,
         receipt=receipt,
         customer_id=customer_id,
+        product_name=product.name,
+    )
+
+
+@router.post("/create_cod_order", response_model=CreateCodOrderOutput)
+def create_cod_order(
+    payload: CreateCodOrderInput,
+    decoded: Annotated[dict, Depends(get_current_user)],
+) -> CreateCodOrderOutput:
+    """Cash-on-Delivery via WhatsApp. No Razorpay call — we just record the
+    order in Firestore so it shows up in the admin dashboard and the user's
+    /account list. Status stays `cod_pending` until the admin marks delivery
+    (which flips it to `paid`).
+    """
+    product = get_product(payload.item.sku)
+    if product is None:
+        raise HTTPException(status_code=404, detail=f"Unknown product sku: {payload.item.sku}")
+    if payload.item.quantity > product.max_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Quantity exceeds the per-order limit of {product.max_quantity}.",
+        )
+
+    amount_paise = product.unit_price_paise * payload.item.quantity
+    receipt = _make_receipt()
+
+    try:
+        customer_id, _ = resolve_or_create_customer(decoded)
+        _update_customer_from_form(customer_id, payload)
+    except gax_exceptions.PermissionDenied as exc:
+        logger.exception("Firestore permission denied")
+        raise HTTPException(
+            status_code=503,
+            detail="Firestore is not enabled or the service account lacks permission.",
+        ) from exc
+    except gax_exceptions.GoogleAPIError as exc:
+        logger.exception("Firestore error")
+        raise HTTPException(status_code=503, detail=f"Firestore error: {exc}") from exc
+
+    token_phone: str = decoded.get("phone_number") or payload.customer.phone
+
+    new_ref = db().collection("orders").document()
+    order_doc = {
+        "razorpay_order_id": None,
+        "receipt": receipt,
+        "status": OrderStatus.cod_pending.value,
+        "payment_method": "cod_whatsapp",
+        "amount": amount_paise,
+        "amount_paid": 0,
+        "currency": product.currency,
+        "item": {
+            "sku": product.sku,
+            "name": product.name,
+            "quantity": payload.item.quantity,
+            "unit_price_paise": product.unit_price_paise,
+            "line_total_paise": amount_paise,
+        },
+        "customer": {
+            "full_name": payload.customer.full_name,
+            "phone": token_phone,
+            "email": payload.customer.email,
+        },
+        "customer_id": customer_id,
+        "firebase_uid": decoded["uid"],
+        "shipping_address": payload.shipping_address.model_dump(),
+        "created_at": SERVER_TIMESTAMP,
+        "updated_at": SERVER_TIMESTAMP,
+        "paid_at": None,
+    }
+    new_ref.set(order_doc)
+
+    return CreateCodOrderOutput(
+        order_id=new_ref.id,
+        receipt=receipt,
+        amount=amount_paise,
+        currency=product.currency,
         product_name=product.name,
     )
 

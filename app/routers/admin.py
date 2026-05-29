@@ -65,6 +65,7 @@ def list_orders(
                 receipt=data.get("receipt", ""),
                 status=data.get("status", "created"),
                 fulfillment_status=data.get("fulfillment_status"),
+                payment_method=data.get("payment_method"),
                 amount=int(data.get("amount", 0)),
                 amount_paid=int(data.get("amount_paid", 0)),
                 currency=data.get("currency", "INR"),
@@ -107,8 +108,8 @@ def mark_shipped(
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Order not found")
     data = snap.to_dict() or {}
-    if data.get("status") != "paid":
-        raise HTTPException(status_code=400, detail="Only paid orders can be marked shipped")
+    if data.get("status") not in ("paid", "cod_pending"):
+        raise HTTPException(status_code=400, detail="Only paid or COD orders can be marked shipped")
 
     update: dict = {
         "fulfillment_status": "shipped",
@@ -135,8 +136,9 @@ def mark_delivered(
     if not snap.exists:
         raise HTTPException(status_code=404, detail="Order not found")
     data = snap.to_dict() or {}
-    if data.get("status") != "paid":
-        raise HTTPException(status_code=400, detail="Only paid orders can be marked delivered")
+    current_status = data.get("status")
+    if current_status not in ("paid", "cod_pending"):
+        raise HTTPException(status_code=400, detail="Only paid or COD orders can be marked delivered")
 
     update: dict = {
         "fulfillment_status": "delivered",
@@ -144,6 +146,12 @@ def mark_delivered(
         "delivered_by": decoded.get("email") or decoded.get("phone_number") or decoded["uid"],
         "updated_at": SERVER_TIMESTAMP,
     }
+    # COD orders: cash collected on delivery — flip to paid.
+    if current_status == "cod_pending":
+        update["status"] = "paid"
+        update["amount_paid"] = int(data.get("amount", 0))
+        update["paid_at"] = SERVER_TIMESTAMP
+        update["paid_via"] = "cod_delivery"
     if payload.notes:
         update["admin_notes"] = payload.notes.strip()
     ref.set(update, merge=True)

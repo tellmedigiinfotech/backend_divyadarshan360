@@ -74,3 +74,4 @@ class CustomerOrderListItem(BaseModel):
     tracking_number: str | None = None
     courier: str | None = None
     shipped_at: str | None = None
+    payment_method: str | None = None

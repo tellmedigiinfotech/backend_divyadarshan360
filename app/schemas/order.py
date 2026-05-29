@@ -12,6 +12,7 @@ class OrderStatus(str, Enum):
     paid = "paid"
     failed = "failed"
     expired = "expired"
+    cod_pending = "cod_pending"
 
 
 class CartLineInput(BaseModel):
@@ -32,6 +33,20 @@ class CreateOrderOutput(BaseModel):
     currency: str
     receipt: str
     customer_id: str
+    product_name: str
+
+
+class CreateCodOrderInput(BaseModel):
+    item: CartLineInput
+    customer: CustomerInput
+    shipping_address: ShippingAddressInput
+
+
+class CreateCodOrderOutput(BaseModel):
+    order_id: str
+    receipt: str
+    amount: int
+    currency: str
     product_name: str
 
 
@@ -84,6 +99,7 @@ class OrderView(BaseModel):
     shipped_at: str | None = None
     delivered_at: str | None = None
     admin_notes: str | None = None
+    payment_method: str | None = None
 
 
 # --- Smart Collect (UPI virtual account) flow ---
@@ -122,6 +138,7 @@ class AdminOrderListItem(BaseModel):
     receipt: str
     status: str
     fulfillment_status: str | None = None
+    payment_method: str | None = None
     amount: int
     amount_paid: int
     currency: str
