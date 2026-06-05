@@ -14,6 +14,7 @@ class OrderStatus(str, Enum):
     expired = "expired"
     cod_pending = "cod_pending"
     refunded = "refunded"
+    cancelled = "cancelled"
 
 
 class CartLineInput(BaseModel):
@@ -107,6 +108,8 @@ class OrderView(BaseModel):
     refund_status: str | None = None
     refunded_at: str | None = None
     refund_reason: str | None = None
+    cancelled_at: str | None = None
+    cancellation_reason: str | None = None
 
 
 # --- Smart Collect (UPI virtual account) flow ---
@@ -178,6 +181,10 @@ class AdminRefundOrderInput(BaseModel):
     amount_paise: Annotated[int | None, Field(default=None, ge=100)] = None
     reason: Annotated[str, Field(min_length=2, max_length=500)]
     instant: bool = False
+
+
+class AdminCancelOrderInput(BaseModel):
+    reason: Annotated[str, Field(min_length=2, max_length=500)]
 
 
 class OrderStatusOutput(BaseModel):

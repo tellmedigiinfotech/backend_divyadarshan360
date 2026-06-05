@@ -9,6 +9,7 @@ from .. import razorpay_utils, whatsapp
 from ..auth import require_admin
 from ..firebase import SERVER_TIMESTAMP, db
 from ..schemas.order import (
+    AdminCancelOrderInput,
     AdminMarkDeliveredInput,
     AdminOrderListItem,
     AdminRefundOrderInput,
@@ -156,6 +157,42 @@ def mark_delivered(
         update["paid_via"] = "cod_delivery"
     if payload.notes:
         update["admin_notes"] = payload.notes.strip()
+    ref.set(update, merge=True)
+    return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))
+
+
+@router.post("/orders/{order_id}/cancel", response_model=OrderView)
+def cancel_order(
+    order_id: str,
+    payload: AdminCancelOrderInput,
+    decoded: Annotated[dict, Depends(require_admin)],
+) -> OrderView:
+    """Cancel a COD order before it's delivered.
+
+    Only orders in `cod_pending` status can be cancelled here — paid orders
+    must be refunded (different flow), and already-shipped COD orders should
+    still be cancellable so RTO (Return To Origin) cases are covered.
+    """
+    ref = db().collection("orders").document(order_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Order not found")
+    data = snap.to_dict() or {}
+
+    if data.get("status") != "cod_pending":
+        raise HTTPException(
+            status_code=400,
+            detail="Only COD orders awaiting delivery can be cancelled. "
+            "For paid orders, issue a refund instead.",
+        )
+
+    update: dict = {
+        "status": "cancelled",
+        "cancellation_reason": payload.reason.strip(),
+        "cancelled_at": SERVER_TIMESTAMP,
+        "cancelled_by": decoded.get("email") or decoded.get("phone_number") or decoded["uid"],
+        "updated_at": SERVER_TIMESTAMP,
+    }
     ref.set(update, merge=True)
     return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))
 

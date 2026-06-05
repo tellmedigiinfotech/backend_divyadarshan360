@@ -81,6 +81,8 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
         refund_status=data.get("refund_status"),
         refunded_at=_ts_to_iso(data.get("refunded_at")),
         refund_reason=data.get("refund_reason"),
+        cancelled_at=_ts_to_iso(data.get("cancelled_at")),
+        cancellation_reason=data.get("cancellation_reason"),
     )
 
 
