@@ -9,6 +9,7 @@ from google.api_core import exceptions as gax_exceptions
 
 from .. import razorpay_utils, whatsapp
 from ..auth import get_current_user
+from ..blocklist import is_phone_blocked
 from ..config import settings
 from ..firebase import SERVER_TIMESTAMP, db
 from ..products import get_product
@@ -120,6 +121,10 @@ def create_order(
     payload: CreateOrderInput,
     decoded: Annotated[dict, Depends(get_current_user)],
 ) -> CreateOrderOutput:
+    token_phone_for_block = decoded.get("phone_number") or payload.customer.phone
+    if is_phone_blocked(token_phone_for_block):
+        raise HTTPException(status_code=403, detail="This phone is not allowed to place orders.")
+
     product = get_product(payload.item.sku)
     if product is None:
         raise HTTPException(status_code=404, detail=f"Unknown product sku: {payload.item.sku}")
@@ -217,6 +222,10 @@ def create_cod_order(
     /account list. Status stays `cod_pending` until the admin marks delivery
     (which flips it to `paid`).
     """
+    token_phone_for_block = decoded.get("phone_number") or payload.customer.phone
+    if is_phone_blocked(token_phone_for_block):
+        raise HTTPException(status_code=403, detail="This phone is not allowed to place orders.")
+
     product = get_product(payload.item.sku)
     if product is None:
         raise HTTPException(status_code=404, detail=f"Unknown product sku: {payload.item.sku}")
