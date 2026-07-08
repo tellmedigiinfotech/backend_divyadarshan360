@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     merchant_support_email: str = "connect@youtellme.ai"
     merchant_support_phone: str = "+91 90499 21850"
 
+    # Internal inbox that receives an alert whenever a new COD order is placed.
+    team_notification_email: str = "team.divyadarshan@gmail.com"
+
     # Razorpay Smart Collect (virtual account) payee details shown to customers
     # when they pay via direct UPI/bank transfer outside the standard checkout
     # modal. These match the assigned values from the Razorpay dashboard.

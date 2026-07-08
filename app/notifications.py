@@ -8,8 +8,11 @@ must return 200 to Razorpay even when a notification side-effect fails.
 from __future__ import annotations
 
 import logging
+import smtplib
+import ssl
 from email.message import EmailMessage
 from email.utils import formataddr
+from html import escape
 from typing import Any
 
 import aiosmtplib
@@ -383,3 +386,114 @@ async def send_payment_receipt(order: dict[str, Any]) -> dict:
         result["whatsapp"] = {"sent": False, "reason": "no_phone_number"}
 
     return result
+
+
+def send_email_sync(recipient: str, subject: str, html_body: str, text_body: str) -> dict:
+    """Blocking SMTP send, for use from sync endpoints (e.g. COD order creation).
+
+    Mirrors send_email_async but uses the stdlib smtplib so it can run outside
+    an event loop. Non-throwing: returns {"sent": True} or
+    {"sent": False, "reason": "..."}.
+    """
+    if not settings.smtp_username or not settings.smtp_password:
+        return {"sent": False, "reason": "smtp_not_configured"}
+
+    message = EmailMessage()
+    message["From"] = formataddr((settings.smtp_from_name, settings.smtp_username))
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(text_body)
+    message.add_alternative(html_body, subtype="html")
+
+    try:
+        if settings.smtp_port == 465:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port, context=context, timeout=30) as server:
+                server.login(settings.smtp_username, settings.smtp_password)
+                server.send_message(message)
+        else:  # 587 / STARTTLS (or plain)
+            with smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=30) as server:
+                if settings.smtp_port == 587:
+                    server.starttls(context=ssl.create_default_context())
+                server.login(settings.smtp_username, settings.smtp_password)
+                server.send_message(message)
+        return {"sent": True}
+    except Exception as exc:
+        logger.exception("send_email_sync failed for %s", recipient)
+        return {"sent": False, "reason": "smtp_error", "error": str(exc)}
+
+
+def render_cod_team_alert(order: dict[str, Any]) -> tuple[str, str, str]:
+    """Internal team notification for a newly-placed COD order.
+
+    Returns (subject, html_body, text_body). `order` is the Firestore order doc.
+    """
+    item = order.get("item") or {}
+    customer = order.get("customer") or {}
+    shipping = order.get("shipping_address") or {}
+    order_id = order.get("receipt") or order.get("razorpay_order_id") or "—"
+    amount_rupees = int(order.get("amount", 0)) // 100
+    qty = int(item.get("quantity", 1))
+    name = customer.get("full_name") or "—"
+    phone = customer.get("phone") or "—"
+    email = customer.get("email") or "—"
+    addr_lines = [
+        shipping.get("line1") or "",
+        f"{shipping.get('city') or ''} {shipping.get('state') or ''} - {shipping.get('pincode') or ''}".strip(),
+        shipping.get("country") or "IN",
+    ]
+    addr_text = "\n  ".join(line for line in addr_lines if line.strip(" -"))
+    notes = shipping.get("notes") or ""
+
+    subject = f"🛒 New COD order · {order_id} · ₹{amount_rupees} · {name}"
+
+    text_body = (
+        f"New Cash-on-Delivery order placed.\n\n"
+        f"Order ID:   {order_id}\n"
+        f"Item:       {item.get('name', 'Order')} x {qty}\n"
+        f"COD amount: ₹{amount_rupees} (collect on delivery)\n\n"
+        f"Customer:   {name}\n"
+        f"Phone:      {phone}\n"
+        f"Email:      {email}\n\n"
+        f"Ship to:\n  {addr_text}\n"
+        + (f"\nNotes: {notes}\n" if notes else "")
+        + "\n— Divya Darshan 360 (automated)\n"
+    )
+
+    row = "padding:8px 0;border-bottom:1px solid #f3e8d2;font-size:14px;color:#374151;"
+    lbl = "font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#9ca3af;"
+    html_body = f"""<!doctype html>
+<html><body style="margin:0;background:#fff7ed;font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:24px;">
+  <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
+    <tr><td style="background:#b8860b;padding:20px 28px;color:#fff;font-size:18px;font-weight:600;">🛒 New COD Order</td></tr>
+    <tr><td style="padding:24px 28px;">
+      <div style="{lbl}">Order ID</div>
+      <div style="font-family:monospace;font-size:15px;color:#b8860b;font-weight:700;{row}">{escape(str(order_id))}</div>
+      <div style="{lbl}margin-top:14px;">Item</div>
+      <div style="{row}">{escape(str(item.get('name', 'Order')))} &times; {qty}</div>
+      <div style="{lbl}margin-top:14px;">COD amount to collect</div>
+      <div style="{row}font-weight:700;color:#16a34a;">₹{amount_rupees}</div>
+      <div style="{lbl}margin-top:14px;">Customer</div>
+      <div style="{row}">{escape(str(name))} &middot; {escape(str(phone))} &middot; {escape(str(email))}</div>
+      <div style="{lbl}margin-top:14px;">Ship to</div>
+      <div style="padding:8px 0;font-size:14px;color:#374151;line-height:1.6;">{escape(addr_text).replace(chr(10) + '  ', '<br/>')}</div>
+      {f'<div style="{lbl}margin-top:14px;">Notes</div><div style="{row}">{escape(str(notes))}</div>' if notes else ''}
+    </td></tr>
+    <tr><td style="background:#1f2937;padding:14px 28px;text-align:center;font-size:11px;color:rgba(255,255,255,0.55);">Automated alert &middot; DivyaDarshan360.com</td></tr>
+  </table>
+</body></html>"""
+
+    return subject, html_body, text_body
+
+
+def send_cod_team_alert(order: dict[str, Any], recipient: str | None = None) -> dict:
+    """Render + send the COD team alert synchronously. Never raises."""
+    to = recipient or settings.team_notification_email
+    if not to:
+        return {"sent": False, "reason": "no_recipient"}
+    try:
+        subject, html_body, text_body = render_cod_team_alert(order)
+    except Exception as exc:
+        logger.exception("Failed to render COD team alert")
+        return {"sent": False, "reason": "render_error", "error": str(exc)}
+    return send_email_sync(to, subject, html_body, text_body)

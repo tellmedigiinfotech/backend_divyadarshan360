@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from google.api_core import exceptions as gax_exceptions
 
-from .. import razorpay_utils, whatsapp
+from .. import notifications, razorpay_utils, whatsapp
 from ..auth import get_current_user
 from ..blocklist import is_phone_blocked
 from ..config import settings
@@ -292,6 +292,15 @@ def create_cod_order(
     )
     if sent:
         new_ref.set({"whatsapp_confirmation_sent_at": SERVER_TIMESTAMP}, merge=True)
+
+    # Notify the internal team of the new COD order. Non-throwing — a mail
+    # failure must not fail the order.
+    try:
+        alert = notifications.send_cod_team_alert(order_doc)
+        if not alert.get("sent"):
+            logger.warning("COD team alert not sent: %s", alert.get("reason"))
+    except Exception:
+        logger.exception("Unexpected error sending COD team alert")
 
     return CreateCodOrderOutput(
         order_id=new_ref.id,
