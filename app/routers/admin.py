@@ -197,6 +197,44 @@ def cancel_order(
     return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))
 
 
+@router.delete("/orders/{order_id}")
+def delete_order(
+    order_id: str,
+    decoded: Annotated[dict, Depends(require_admin)],
+) -> dict:
+    """Permanently delete an order (admin only). IRREVERSIBLE.
+
+    Intended for clearing test / spam orders from the dashboard. Also best-effort
+    removes linked transactions / unmatched_payments / refunds. For genuine
+    customer orders, prefer cancel (COD) or refund (paid) instead of deleting.
+    """
+    ref = db().collection("orders").document(order_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Order not found")
+    data = snap.to_dict() or {}
+
+    related_deleted = 0
+    rzp_id = data.get("razorpay_order_id")
+    if rzp_id:
+        for name in ("transactions", "unmatched_payments", "refunds"):
+            try:
+                for s in db().collection(name).where("razorpay_order_id", "==", rzp_id).stream():
+                    s.reference.delete()
+                    related_deleted += 1
+            except gax_exceptions.GoogleAPIError:
+                logger.exception("Failed cleaning %s for order %s", name, order_id)
+
+    ref.delete()
+    logger.info(
+        "Order %s deleted by %s (related_deleted=%d)",
+        order_id,
+        decoded.get("email") or decoded.get("phone_number") or decoded.get("uid"),
+        related_deleted,
+    )
+    return {"deleted": True, "order_id": order_id, "related_deleted": related_deleted}
+
+
 @router.post("/orders/{order_id}/refund", response_model=OrderView)
 def refund_order(
     order_id: str,
