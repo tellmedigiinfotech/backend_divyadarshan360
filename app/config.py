@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str | None = None
     receipt_prefix: str = "DD360"
 
+    # Flat handling fee added to Cash-on-Delivery orders, in paise (5000 = ₹50).
+    # Keep the frontend COD_FEE (checkout-client.tsx) in sync with this value.
+    cod_fee_paise: int = 5000
+
     # Admin allowlists. A signed-in Firebase user whose verified phone_number
     # is in ADMIN_PHONES (E.164, e.g. +919049921850) — or whose email is in
     # ADMIN_EMAILS — may access /admin. Everyone else gets a 404.

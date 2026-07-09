@@ -433,6 +433,8 @@ def render_cod_team_alert(order: dict[str, Any]) -> tuple[str, str, str]:
     shipping = order.get("shipping_address") or {}
     order_id = order.get("receipt") or order.get("razorpay_order_id") or "—"
     amount_rupees = int(order.get("amount", 0)) // 100
+    fee_rupees = int(order.get("cod_fee_paise", 0)) // 100
+    fee_note = f" (incl. ₹{fee_rupees} handling)" if fee_rupees else ""
     qty = int(item.get("quantity", 1))
     name = customer.get("full_name") or "—"
     phone = customer.get("phone") or "—"
@@ -451,7 +453,7 @@ def render_cod_team_alert(order: dict[str, Any]) -> tuple[str, str, str]:
         f"New Cash-on-Delivery order placed.\n\n"
         f"Order ID:   {order_id}\n"
         f"Item:       {item.get('name', 'Order')} x {qty}\n"
-        f"COD amount: ₹{amount_rupees} (collect on delivery)\n\n"
+        f"COD amount: ₹{amount_rupees}{fee_note} (collect on delivery)\n\n"
         f"Customer:   {name}\n"
         f"Phone:      {phone}\n"
         f"Email:      {email}\n\n"
@@ -472,7 +474,7 @@ def render_cod_team_alert(order: dict[str, Any]) -> tuple[str, str, str]:
       <div style="{lbl}margin-top:14px;">Item</div>
       <div style="{row}">{escape(str(item.get('name', 'Order')))} &times; {qty}</div>
       <div style="{lbl}margin-top:14px;">COD amount to collect</div>
-      <div style="{row}font-weight:700;color:#16a34a;">₹{amount_rupees}</div>
+      <div style="{row}font-weight:700;color:#16a34a;">₹{amount_rupees}{escape(fee_note)}</div>
       <div style="{lbl}margin-top:14px;">Customer</div>
       <div style="{row}">{escape(str(name))} &middot; {escape(str(phone))} &middot; {escape(str(email))}</div>
       <div style="{lbl}margin-top:14px;">Ship to</div>

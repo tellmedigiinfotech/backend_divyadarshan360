@@ -253,6 +253,10 @@ def create_cod_order(
 
     token_phone: str = decoded.get("phone_number") or payload.customer.phone
 
+    # Flat COD handling fee on top of the product total.
+    cod_fee_paise = settings.cod_fee_paise
+    amount_paise += cod_fee_paise
+
     new_ref = db().collection("orders").document()
     order_doc = {
         "razorpay_order_id": None,
@@ -260,6 +264,7 @@ def create_cod_order(
         "status": OrderStatus.cod_pending.value,
         "payment_method": "cod_whatsapp",
         "amount": amount_paise,
+        "cod_fee_paise": cod_fee_paise,
         "amount_paid": 0,
         "currency": product.currency,
         "item": {
