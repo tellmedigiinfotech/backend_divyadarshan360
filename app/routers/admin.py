@@ -197,7 +197,7 @@ def cancel_order(
     return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))
 
 
-@router.delete("/orders/{order_id}")
+@router.post("/orders/{order_id}/delete")
 def delete_order(
     order_id: str,
     decoded: Annotated[dict, Depends(require_admin)],
