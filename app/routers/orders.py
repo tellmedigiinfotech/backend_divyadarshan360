@@ -302,8 +302,15 @@ def create_cod_order(
     # failure must not fail the order.
     try:
         alert = notifications.send_cod_team_alert(order_doc)
-        if not alert.get("sent"):
-            logger.warning("COD team alert not sent: %s", alert.get("reason"))
+        if alert.get("sent"):
+            logger.info("COD team alert sent for %s", receipt)
+        else:
+            logger.warning(
+                "COD team alert not sent for %s: reason=%s error=%s",
+                receipt,
+                alert.get("reason"),
+                alert.get("error"),
+            )
     except Exception:
         logger.exception("Unexpected error sending COD team alert")
 
