@@ -9,6 +9,12 @@ class Product(BaseModel):
     mrp_paise: int
     currency: str = "INR"
     max_quantity: int = 10
+    # Stable IDs exposed to Fastrr (Shiprocket Checkout) in the catalog APIs and
+    # used as the variant_id when generating a checkout token. Must stay constant.
+    fastrr_product_id: str = ""
+    fastrr_variant_id: str = ""
+    # Physical attributes Fastrr/Shiprocket need for shipping.
+    weight_kg: float = 0.5
 
 
 CATALOG: dict[str, Product] = {
@@ -20,9 +26,19 @@ CATALOG: dict[str, Product] = {
         mrp_paise=299900,
         currency="INR",
         max_quantity=10,
+        fastrr_product_id="900001",
+        fastrr_variant_id="900101",
+        weight_kg=0.5,
     ),
 }
 
 
 def get_product(sku: str) -> Product | None:
     return CATALOG.get(sku)
+
+
+def get_product_by_fastrr_variant(variant_id: str) -> Product | None:
+    for p in CATALOG.values():
+        if p.fastrr_variant_id == variant_id:
+            return p
+    return None

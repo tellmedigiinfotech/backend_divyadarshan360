@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     # Keep the frontend COD_FEE (checkout-client.tsx) in sync with this value.
     cod_fee_paise: int = 5000
 
+    # Fastrr by Shiprocket — Checkout integration.
+    # Auth: X-Api-Key + X-Api-HMAC-SHA256 (Base64 HMAC-SHA256 of the request body,
+    # signed with the secret). fastrr_env switches the base URL between the
+    # staging (pickrr) and production (shiprocket) hosts.
+    fastrr_api_key: str | None = None
+    fastrr_api_secret: str | None = None
+    fastrr_env: str = "production"  # "staging" | "production"
+    # Shared secret we append to the order-webhook URL and check on inbound calls,
+    # since Fastrr's order webhook is not HMAC-signed. Set to a long random string.
+    fastrr_webhook_token: str | None = None
+
     # Admin allowlists. A signed-in Firebase user whose verified phone_number
     # is in ADMIN_PHONES (E.164, e.g. +919049921850) — or whose email is in
     # ADMIN_EMAILS — may access /admin. Everyone else gets a 404.
