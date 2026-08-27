@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from google.api_core import exceptions as gax_exceptions
 from google.cloud import firestore as firestore_module
 
-from .. import razorpay_utils, whatsapp
+from .. import fastrr, razorpay_utils, whatsapp
 from ..auth import require_admin
 from ..firebase import SERVER_TIMESTAMP, db
 from ..schemas.order import (
@@ -235,13 +235,88 @@ def delete_order(
     return {"deleted": True, "order_id": order_id, "related_deleted": related_deleted}
 
 
+def _refund_fastrr_order(
+    *,
+    ref,
+    order_id: str,
+    data: dict,
+    fastrr_order_id: str,
+    refund_amount: int,
+    captured_amount: int,
+    payload: AdminRefundOrderInput,
+    decoded: dict,
+) -> OrderView:
+    """Refund a Fastrr-paid order via Fastrr's Refund Initiate API.
+
+    Fastrr wants the amount in rupees and returns an async refund (status
+    INITIATED); we record it and flip the order to `refunded` on a full refund,
+    mirroring the Razorpay path. Poll Fastrr's refund report to confirm settlement.
+    """
+    issued_by = decoded.get("email") or decoded.get("phone_number") or decoded["uid"]
+    try:
+        resp = fastrr.initiate_refund(fastrr_order_id, refund_amount / 100)
+    except fastrr.FastrrError as exc:
+        logger.exception("Fastrr refund failed for order %s", order_id)
+        raise HTTPException(status_code=502, detail=f"Fastrr refund failed: {exc}") from exc
+
+    inner = ((resp.get("data") or {}).get("data")) or {}
+    refund_id = inner.get("id")
+    refund_status = inner.get("status") or "INITIATED"
+    is_full_refund = refund_amount == captured_amount
+
+    if refund_id:
+        db().collection("refunds").document(refund_id).set(
+            {
+                "refund_id": refund_id,
+                "fastrr_order_id": fastrr_order_id,
+                "order_id": order_id,
+                "amount": refund_amount,
+                "currency": data.get("currency", "INR"),
+                "status": refund_status,
+                "reason": payload.reason.strip(),
+                "fastrr_refund_body": resp,
+                "issued_by": issued_by,
+                "source": "admin_fastrr",
+                "created_at": SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+
+    update: dict = {
+        "refund_id": refund_id,
+        "refund_amount": refund_amount,
+        "refund_status": refund_status,
+        "refund_reason": payload.reason.strip(),
+        "refunded_at": SERVER_TIMESTAMP,
+        "refunded_by": issued_by,
+        "updated_at": SERVER_TIMESTAMP,
+    }
+    if is_full_refund:
+        update["status"] = "refunded"
+    ref.set(update, merge=True)
+
+    cust = data.get("customer") or {}
+    whatsapp.send_refund_processed(
+        phone=cust.get("phone") or "",
+        name=cust.get("full_name"),
+        order_id=data.get("receipt") or order_id,
+        amount_rupees=refund_amount // 100,
+        status=refund_status or "processed",
+    )
+
+    return _doc_to_order_view(order_id, (ref.get().to_dict() or {}))
+
+
 @router.post("/orders/{order_id}/refund", response_model=OrderView)
 def refund_order(
     order_id: str,
     payload: AdminRefundOrderInput,
     decoded: Annotated[dict, Depends(require_admin)],
 ) -> OrderView:
-    """Issue a Razorpay refund and mark the order refunded.
+    """Issue a refund and mark the order refunded.
+
+    Fastrr-paid orders (fastrr_order_id, no Razorpay payment) refund through
+    Fastrr's Refund Initiate API; Razorpay-paid orders through Razorpay.
 
     - Razorpay-paid orders: calls the Razorpay refund API. `amount_paise=None`
       issues a full refund of the captured amount. Partial refunds keep
@@ -260,12 +335,6 @@ def refund_order(
         raise HTTPException(status_code=400, detail="Order is already refunded")
     if data.get("status") != "paid":
         raise HTTPException(status_code=400, detail="Only paid orders can be refunded")
-    payment_id = data.get("razorpay_payment_id")
-    if not payment_id:
-        raise HTTPException(
-            status_code=400,
-            detail="No Razorpay payment on this order — refund cash offline.",
-        )
 
     captured_amount = int(data.get("amount_paid") or data.get("amount") or 0)
     refund_amount = int(payload.amount_paise) if payload.amount_paise else captured_amount
@@ -273,6 +342,28 @@ def refund_order(
         raise HTTPException(
             status_code=400,
             detail=f"Refund amount ({refund_amount}) exceeds captured amount ({captured_amount})",
+        )
+
+    # Fastrr-paid orders are refunded through Fastrr (the payment never touched
+    # our Razorpay account), so branch on the payment source.
+    fastrr_order_id = data.get("fastrr_order_id")
+    payment_id = data.get("razorpay_payment_id")
+    if fastrr_order_id and not payment_id:
+        return _refund_fastrr_order(
+            ref=ref,
+            order_id=order_id,
+            data=data,
+            fastrr_order_id=fastrr_order_id,
+            refund_amount=refund_amount,
+            captured_amount=captured_amount,
+            payload=payload,
+            decoded=decoded,
+        )
+
+    if not payment_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No Razorpay payment on this order — refund cash offline.",
         )
 
     try:

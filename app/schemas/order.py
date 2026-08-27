@@ -113,6 +113,8 @@ class OrderView(BaseModel):
     cancellation_requested: bool = False
     cancellation_requested_at: str | None = None
     cancellation_request_reason: str | None = None
+    source: str | None = None
+    fastrr_order_id: str | None = None
 
 
 # --- Smart Collect (UPI virtual account) flow ---

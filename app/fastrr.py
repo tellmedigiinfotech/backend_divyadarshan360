@@ -105,6 +105,27 @@ def fetch_order_details(order_id: str) -> dict:
     return _post("/api/v1/custom-platform-order/details", payload)
 
 
+def initiate_refund(order_id: str, amount_rupees: float) -> dict:
+    """POST /api/v1/external/refund/initiate — refund a Fastrr-paid order.
+
+    `order_id` is the Fastrr order id (the same id used by order/details), and
+    `amount` is in RUPEES (not paise). Returns Fastrr's response; the refund id is
+    at result["data"]["data"]["id"] and status at result["data"]["data"]["status"]
+    (e.g. "INITIATED"). Refunds are async — poll /external/refund/reports to track.
+    """
+    payload = {"amount": amount_rupees, "order_id": order_id}
+    return _post("/api/v1/external/refund/initiate", payload)
+
+
+def refund_report(from_date: str, to_date: str, page: int = 0) -> dict:
+    """POST /api/v1/external/refund/reports — list refunds in a date window.
+
+    Dates are plain yyyy-MM-dd. Returns {status, data:{total_refunds, refunds:[...]}}.
+    """
+    payload = {"page": page, "from": from_date, "to": to_date}
+    return _post("/api/v1/external/refund/reports", payload)
+
+
 def _iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 

@@ -89,6 +89,8 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
         cancellation_requested=bool(data.get("cancellation_requested")),
         cancellation_requested_at=_ts_to_iso(data.get("cancellation_requested_at")),
         cancellation_request_reason=data.get("cancellation_request_reason"),
+        source=data.get("source"),
+        fastrr_order_id=data.get("fastrr_order_id"),
     )
 
 
