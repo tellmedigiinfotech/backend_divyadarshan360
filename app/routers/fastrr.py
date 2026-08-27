@@ -192,12 +192,23 @@ def order_webhook(payload: dict, token: Annotated[str | None, Query()] = None) -
     Verified by a shared secret on the URL (?token=) because Fastrr does not sign
     this webhook. Idempotent on fastrr_order_id.
     """
+    logger.info(
+        "Fastrr webhook hit: status=%s order_id=%s payment_type=%s payment_status=%s has_token=%s",
+        payload.get("status"),
+        payload.get("order_id"),
+        payload.get("payment_type"),
+        payload.get("payment_status"),
+        bool(token),
+    )
+
     expected = settings.fastrr_webhook_token
     if not expected or not token or not secrets.compare_digest(token, expected):
+        logger.warning("Fastrr webhook rejected: invalid/missing token")
         raise HTTPException(status_code=403, detail="Invalid webhook token.")
 
     if (payload.get("status") or "").upper() != "SUCCESS":
         # Ignore non-success callbacks but acknowledge so Fastrr stops retrying.
+        logger.info("Fastrr webhook ignored (status != SUCCESS): %s", payload.get("status"))
         return {"ok": True, "ignored": payload.get("status")}
 
     fastrr_order_id = payload.get("order_id")
