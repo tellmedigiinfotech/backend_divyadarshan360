@@ -148,6 +148,36 @@ def checkout_token(payload: dict) -> dict:
     return {"token": token, "order_id": (inner.get("data") or {}).get("order_id")}
 
 
+# --- Order status (polled by our success page to fire the conversion) ---
+
+
+@router.get("/order-status/{fastrr_order_id}")
+def order_status(fastrr_order_id: str) -> dict:
+    """Look up the order the webhook created, by Fastrr's order id.
+
+    The success page polls this after checkout to read the amount and fire the
+    Google Ads conversion. Returns found=false until the webhook has landed.
+    """
+    try:
+        snaps = list(
+            db().collection("orders").where("fastrr_order_id", "==", fastrr_order_id).limit(1).stream()
+        )
+    except gax_exceptions.GoogleAPIError as exc:
+        raise HTTPException(status_code=503, detail="Lookup failed.") from exc
+
+    if not snaps:
+        return {"found": False}
+
+    data = snaps[0].to_dict() or {}
+    return {
+        "found": True,
+        "status": data.get("status"),
+        "payment_method": data.get("payment_method"),
+        "amount_paise": int(data.get("amount", 0)),
+        "receipt": data.get("receipt"),
+    }
+
+
 # --- Order webhook (called by Fastrr) ---
 
 
