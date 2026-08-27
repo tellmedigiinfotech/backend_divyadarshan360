@@ -178,11 +178,139 @@ def order_status(fastrr_order_id: str) -> dict:
     }
 
 
-# --- Order webhook (called by Fastrr) ---
+# --- Order persistence + pull-based sync (webhook-independent) ---
 
 
 def _make_receipt() -> str:
     return f"{settings.receipt_prefix}-{int(time.time())}-{secrets.token_hex(3).upper()}"
+
+
+def _persist_fastrr_order(
+    *,
+    fastrr_order_id: str,
+    is_cod: bool,
+    amount_paise: int,
+    cod_fee_paise: int,
+    qty: int,
+    full_name: str,
+    phone: str,
+    email: str | None,
+    addr: dict,
+) -> tuple[str, bool]:
+    """Create the Firestore order if it doesn't exist. Returns (receipt, created).
+
+    Idempotent on fastrr_order_id, so the webhook and the pull-based sync can both
+    run without creating duplicates.
+    """
+    orders = db().collection("orders")
+    existing = list(orders.where("fastrr_order_id", "==", fastrr_order_id).limit(1).stream())
+    if existing:
+        return (existing[0].to_dict() or {}).get("receipt", ""), False
+
+    product = get_product("mobile-vr-box")
+    receipt = _make_receipt()
+    order_doc = {
+        "fastrr_order_id": fastrr_order_id,
+        "razorpay_order_id": None,
+        "receipt": receipt,
+        "source": "fastrr",
+        "status": "cod_pending" if is_cod else "paid",
+        "payment_method": "fastrr_cod" if is_cod else "fastrr_prepaid",
+        "payment_type": "CASH_ON_DELIVERY" if is_cod else "PREPAID",
+        "amount": amount_paise,
+        "amount_paid": 0 if is_cod else amount_paise,
+        "currency": "INR",
+        "cod_fee_paise": cod_fee_paise,
+        "item": {
+            "sku": product.sku if product else "mobile-vr-box",
+            "name": product.name if product else "Mobile VR Box",
+            "quantity": qty,
+        },
+        "customer": {"full_name": full_name or "Customer", "phone": phone, "email": email or None},
+        "shipping_address": {
+            "line1": addr.get("line1") or "",
+            "city": addr.get("city") or "",
+            "state": addr.get("state") or "",
+            "pincode": addr.get("pincode") or "",
+            "country": addr.get("country") or "IN",
+        },
+        "created_at": SERVER_TIMESTAMP,
+        "updated_at": SERVER_TIMESTAMP,
+        "paid_at": None if is_cod else SERVER_TIMESTAMP,
+    }
+    orders.document().set(order_doc)
+
+    if is_cod:
+        try:
+            alert = notifications.send_cod_team_alert(order_doc)
+            if alert.get("sent"):
+                logger.info("Fastrr COD team alert sent for %s", receipt)
+            else:
+                logger.warning("Fastrr COD team alert not sent for %s: %s", receipt, alert.get("reason"))
+        except Exception:
+            logger.exception("Fastrr COD team alert error")
+
+    return receipt, True
+
+
+@router.post("/sync-order")
+def sync_order(payload: dict) -> dict:
+    """Pull an order from Fastrr by id and record it — no webhook required.
+
+    Fastrr's push webhook has proven unreliable, so the success page calls this
+    with the order_id captured at checkout. We fetch the order and, if it's a real
+    SUCCESS order, create the Firestore order (idempotent) + team alert, then
+    return the amount so the page can fire the Google Ads conversion.
+    """
+    order_id = (payload or {}).get("order_id")
+    if not order_id:
+        raise HTTPException(status_code=400, detail="Missing order_id.")
+
+    try:
+        result = fastrr.fetch_order_details(order_id)
+    except fastrr.FastrrError as exc:
+        logger.warning("Fastrr fetch_order_details failed for %s: %s", order_id, exc)
+        return {"found": False}
+
+    r = result.get("result") or {}
+    if (r.get("status") or "").upper() != "SUCCESS":
+        return {"found": False, "status": r.get("status")}
+
+    fastrr_order_id = r.get("order_id") or order_id
+    is_cod = (r.get("payment_type") or "").upper() == "CASH_ON_DELIVERY"
+    amount_paise = round(float(r.get("total_amount_payable") or 0) * 100)
+    cod_fee_paise = round(float(r.get("cod_charges") or 0) * 100)
+    items = (r.get("cart_data") or {}).get("items") or []
+    qty = sum(int(i.get("quantity", 1)) for i in items) or 1
+    addr = r.get("shipping_address") or {}
+    full_name = " ".join(x for x in [addr.get("first_name"), addr.get("last_name")] if x).strip()
+
+    try:
+        receipt, created = _persist_fastrr_order(
+            fastrr_order_id=fastrr_order_id,
+            is_cod=is_cod,
+            amount_paise=amount_paise,
+            cod_fee_paise=cod_fee_paise,
+            qty=qty,
+            full_name=full_name,
+            phone=r.get("phone") or "",
+            email=r.get("email"),
+            addr=addr,
+        )
+    except gax_exceptions.GoogleAPIError as exc:
+        logger.exception("Firestore error persisting Fastrr order")
+        raise HTTPException(status_code=503, detail="Could not record order.") from exc
+
+    return {
+        "found": True,
+        "created": created,
+        "receipt": receipt,
+        "amount_paise": amount_paise,
+        "status": "cod_pending" if is_cod else "paid",
+    }
+
+
+# --- Order webhook (called by Fastrr) ---
 
 
 @router.post("/webhook/order")
