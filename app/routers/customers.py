@@ -16,6 +16,7 @@ from ..schemas.customer import (
     CustomerUpdateInput,
 )
 from .auth import _customer_profile, resolve_or_create_customer
+from .fastrr import phone10
 
 
 logger = logging.getLogger(__name__)
@@ -78,29 +79,64 @@ def list_my_orders(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[CustomerOrderListItem]:
     try:
-        customer_id, _ = resolve_or_create_customer(decoded)
+        customer_id, customer_data = resolve_or_create_customer(decoded)
     except gax_exceptions.PermissionDenied as exc:
         raise HTTPException(status_code=503, detail="Firestore not enabled or missing permission") from exc
 
+    orders = db().collection("orders")
+    user_phone10 = phone10(customer_data.get("phone") or decoded.get("phone_number"))
+
+    # Collect from two angles and dedupe by doc id:
+    #  1. orders linked directly to this account (customer_id) — Razorpay + app + linked Fastrr.
+    #  2. Fastrr orders matched by phone (guest checkout, or placed before the account existed).
+    # (2) uses no order_by so it needs no composite index; we sort everything in Python below.
+    docs: dict[str, dict] = {}
     try:
-        snaps = (
-            db()
-            .collection("orders")
-            .where(filter=FieldFilter("customer_id", "==", customer_id))
+        by_id = (
+            orders.where(filter=FieldFilter("customer_id", "==", customer_id))
             .order_by("created_at", direction=firestore_module.Query.DESCENDING)
             .limit(limit)
             .get()
         )
+        for snap in by_id:
+            docs[snap.id] = snap.to_dict() or {}
+
+        if user_phone10:
+            by_phone = (
+                orders.where(filter=FieldFilter("customer_phone", "==", user_phone10))
+                .limit(limit)
+                .get()
+            )
+            for snap in by_phone:
+                if snap.id in docs:
+                    continue
+                data = snap.to_dict() or {}
+                docs[snap.id] = data
+                # Backfill the link so this order is found by customer_id next time
+                # (and shows the right owner in admin). Best-effort.
+                if not data.get("customer_id"):
+                    try:
+                        snap.reference.set(
+                            {"customer_id": customer_id, "updated_at": SERVER_TIMESTAMP},
+                            merge=True,
+                        )
+                    except gax_exceptions.GoogleAPIError:
+                        logger.warning("Could not backfill customer_id on order %s", snap.id)
     except gax_exceptions.GoogleAPIError as exc:
         raise HTTPException(status_code=503, detail=f"Firestore error: {exc}") from exc
 
+    # Newest first across both sources, then apply the limit.
+    def _created_key(item: tuple[str, dict]):
+        return _ts_to_iso(item[1].get("created_at")) or ""
+
+    merged = sorted(docs.items(), key=_created_key, reverse=True)[:limit]
+
     out: list[CustomerOrderListItem] = []
-    for snap in snaps:
-        data = snap.to_dict() or {}
+    for doc_id, data in merged:
         item = data.get("item", {}) or {}
         out.append(
             CustomerOrderListItem(
-                razorpay_order_id=snap.id,
+                razorpay_order_id=doc_id,
                 receipt=data.get("receipt", ""),
                 status=data.get("status", "created"),
                 amount=int(data.get("amount", 0)),

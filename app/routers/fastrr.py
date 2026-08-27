@@ -20,6 +20,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from google.api_core import exceptions as gax_exceptions
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from .. import fastrr, notifications
 from ..config import settings
@@ -185,6 +186,38 @@ def _make_receipt() -> str:
     return f"{settings.receipt_prefix}-{int(time.time())}-{secrets.token_hex(3).upper()}"
 
 
+def phone10(raw: str | None) -> str:
+    """Last 10 digits of a phone, so +91XXXXXXXXXX and bare XXXXXXXXXX match.
+
+    Fastrr gives us a bare 10-digit number; users store E.164 (+91...). We key
+    both on the last 10 digits to link a Fastrr order to its customer account.
+    """
+    digits = "".join(ch for ch in (raw or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def resolve_customer_id(phone_10: str) -> str | None:
+    """Find the users/{uid} whose phone matches this 10-digit number, if any.
+
+    All accounts are Indian (+91). Returns the firebase uid (== customer_id) or
+    None when the buyer has no account yet (guest checkout).
+    """
+    if not phone_10:
+        return None
+    try:
+        snaps = list(
+            db()
+            .collection("users")
+            .where(filter=FieldFilter("phone", "==", f"+91{phone_10}"))
+            .limit(1)
+            .stream()
+        )
+    except gax_exceptions.GoogleAPIError:
+        logger.exception("resolve_customer_id lookup failed for %s", phone_10)
+        return None
+    return snaps[0].id if snaps else None
+
+
 def _persist_fastrr_order(
     *,
     fastrr_order_id: str,
@@ -209,6 +242,8 @@ def _persist_fastrr_order(
 
     product = get_product("mobile-vr-box")
     receipt = _make_receipt()
+    cust_phone10 = phone10(phone)
+    customer_id = resolve_customer_id(cust_phone10)
     order_doc = {
         "fastrr_order_id": fastrr_order_id,
         "razorpay_order_id": None,
@@ -221,6 +256,10 @@ def _persist_fastrr_order(
         "amount_paid": 0 if is_cod else amount_paise,
         "currency": "INR",
         "cod_fee_paise": cod_fee_paise,
+        # Link to the customer account: customer_id when the buyer already has one,
+        # customer_phone always, so /account can match guest-then-signup orders.
+        "customer_id": customer_id,
+        "customer_phone": cust_phone10,
         "item": {
             "sku": product.sku if product else "mobile-vr-box",
             "name": product.name if product else "Mobile VR Box",
@@ -253,19 +292,12 @@ def _persist_fastrr_order(
     return receipt, True
 
 
-@router.post("/sync-order")
-def sync_order(payload: dict) -> dict:
-    """Pull an order from Fastrr by id and record it — no webhook required.
+def _sync_one(order_id: str) -> dict:
+    """Fetch one Fastrr order by id and persist it if it's a real SUCCESS order.
 
-    Fastrr's push webhook has proven unreliable, so the success page calls this
-    with the order_id captured at checkout. We fetch the order and, if it's a real
-    SUCCESS order, create the Firestore order (idempotent) + team alert, then
-    return the amount so the page can fire the Google Ads conversion.
+    Shared by the success-page pull (/sync-order) and the reconciliation cron.
+    Returns the same shape as /sync-order. Raises gax on Firestore failure.
     """
-    order_id = (payload or {}).get("order_id")
-    if not order_id:
-        raise HTTPException(status_code=400, detail="Missing order_id.")
-
     try:
         result = fastrr.fetch_order_details(order_id)
     except fastrr.FastrrError as exc:
@@ -285,22 +317,17 @@ def sync_order(payload: dict) -> dict:
     addr = r.get("shipping_address") or {}
     full_name = " ".join(x for x in [addr.get("first_name"), addr.get("last_name")] if x).strip()
 
-    try:
-        receipt, created = _persist_fastrr_order(
-            fastrr_order_id=fastrr_order_id,
-            is_cod=is_cod,
-            amount_paise=amount_paise,
-            cod_fee_paise=cod_fee_paise,
-            qty=qty,
-            full_name=full_name,
-            phone=r.get("phone") or "",
-            email=r.get("email"),
-            addr=addr,
-        )
-    except gax_exceptions.GoogleAPIError as exc:
-        logger.exception("Firestore error persisting Fastrr order")
-        raise HTTPException(status_code=503, detail="Could not record order.") from exc
-
+    receipt, created = _persist_fastrr_order(
+        fastrr_order_id=fastrr_order_id,
+        is_cod=is_cod,
+        amount_paise=amount_paise,
+        cod_fee_paise=cod_fee_paise,
+        qty=qty,
+        full_name=full_name,
+        phone=r.get("phone") or "",
+        email=r.get("email"),
+        addr=addr,
+    )
     return {
         "found": True,
         "created": created,
@@ -308,6 +335,99 @@ def sync_order(payload: dict) -> dict:
         "amount_paise": amount_paise,
         "status": "cod_pending" if is_cod else "paid",
     }
+
+
+@router.post("/sync-order")
+def sync_order(payload: dict) -> dict:
+    """Pull an order from Fastrr by id and record it — no webhook required.
+
+    Fastrr's push webhook has proven unreliable, so the success page calls this
+    with the order_id captured at checkout. We fetch the order and, if it's a real
+    SUCCESS order, create the Firestore order (idempotent) + team alert, then
+    return the amount so the page can fire the Google Ads conversion.
+    """
+    order_id = (payload or {}).get("order_id")
+    if not order_id:
+        raise HTTPException(status_code=400, detail="Missing order_id.")
+
+    try:
+        return _sync_one(order_id)
+    except gax_exceptions.GoogleAPIError as exc:
+        logger.exception("Firestore error persisting Fastrr order")
+        raise HTTPException(status_code=503, detail="Could not record order.") from exc
+
+
+# --- Reconciliation: pull ALL recent Fastrr orders (webhook-independent) ---
+
+
+def reconcile_recent_orders(days: int = 2, page_limit: int = 50, max_pages: int = 20) -> dict:
+    """List every SUCCESS order in the last `days` and persist any we're missing.
+
+    The success-page pull only records orders where the customer actually lands on
+    /success. This closes the gap: a scheduled run walks Fastrr's order list and
+    syncs anything not already in Firestore. Idempotent via _persist_fastrr_order.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=days)
+    end = now + timedelta(minutes=5)  # small forward pad for clock skew
+
+    seen = 0
+    created = 0
+    errors = 0
+    page = 1
+    while page <= max_pages:
+        try:
+            resp = fastrr.fetch_order_list(start, end, page=page, limit=page_limit)
+        except fastrr.FastrrError as exc:
+            logger.warning("Fastrr order-list page %d failed: %s", page, exc)
+            errors += 1
+            break
+
+        result = resp.get("result") or {}
+        rows = result.get("data") or []
+        if not rows:
+            break
+
+        for row in rows:
+            if (row.get("status") or "").upper() != "SUCCESS":
+                continue
+            oid = row.get("id")
+            if not oid:
+                continue
+            seen += 1
+            try:
+                out = _sync_one(oid)
+                if out.get("created"):
+                    created += 1
+                    logger.info("Reconcile: created order for Fastrr %s (%s)", oid, out.get("receipt"))
+            except gax_exceptions.GoogleAPIError:
+                logger.exception("Reconcile: Firestore error for %s", oid)
+                errors += 1
+
+        total = int(result.get("total") or 0)
+        if page * page_limit >= total:
+            break
+        page += 1
+
+    logger.info("reconcile_recent_orders: success_seen=%d created=%d errors=%d", seen, created, errors)
+    return {"success_seen": seen, "created": created, "errors": errors}
+
+
+@router.post("/reconcile")
+def reconcile(
+    token: Annotated[str | None, Query()] = None,
+    days: Annotated[int, Query(ge=1, le=30)] = 2,
+) -> dict:
+    """Manually trigger reconciliation (also run on a schedule).
+
+    Protected by the same shared secret as the webhook (?token=).
+    """
+    expected = settings.fastrr_webhook_token
+    if not expected or not token or not secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=403, detail="Invalid token.")
+    return reconcile_recent_orders(days=days)
 
 
 # --- Order webhook (called by Fastrr) ---
@@ -364,6 +484,8 @@ def order_webhook(payload: dict, token: Annotated[str | None, Query()] = None) -
             x for x in [addr.get("first_name"), addr.get("last_name")] if x
         ).strip()
 
+        cust_phone10 = phone10(payload.get("phone"))
+        customer_id = resolve_customer_id(cust_phone10)
         receipt = _make_receipt()
         order_doc = {
             "fastrr_order_id": fastrr_order_id,
@@ -377,6 +499,8 @@ def order_webhook(payload: dict, token: Annotated[str | None, Query()] = None) -
             "amount_paid": 0 if is_cod else amount_paise,
             "currency": "INR",
             "cod_fee_paise": settings.cod_fee_paise if is_cod else 0,
+            "customer_id": customer_id,
+            "customer_phone": cust_phone10,
             "item": {
                 "sku": product.sku if product else "mobile-vr-box",
                 "name": product.name if product else "Mobile VR Box",

@@ -18,6 +18,7 @@ from ..schemas.order import (
     CreateCodOrderOutput,
     CreateOrderInput,
     CreateOrderOutput,
+    CustomerCancelOrderInput,
     OrderCustomerView,
     OrderItemView,
     OrderPayer,
@@ -30,6 +31,7 @@ from ..schemas.order import (
     VerifyPaymentOutput,
 )
 from .auth import resolve_or_create_customer
+from .fastrr import phone10
 
 
 logger = logging.getLogger(__name__)
@@ -329,6 +331,77 @@ def _assert_order_ownership(order: dict, decoded: dict) -> None:
     # Reject only if the order DOES have one and it differs from the caller.
     if owner and owner != decoded["uid"]:
         raise HTTPException(status_code=403, detail="Order does not belong to current user")
+
+
+def _owns_order(order: dict, uid: str, caller_phone10: str) -> bool:
+    """True if this order belongs to the caller.
+
+    Covers all linkage shapes: firebase_uid (Razorpay/app), customer_id (linked
+    Fastrr), and customer_phone (guest Fastrr matched by phone).
+    """
+    if order.get("firebase_uid") == uid or order.get("customer_id") == uid:
+        return True
+    order_phone10 = phone10(order.get("customer_phone") or (order.get("customer") or {}).get("phone"))
+    return bool(caller_phone10) and order_phone10 == caller_phone10
+
+
+@router.post("/{order_id}/cancel", response_model=OrderView)
+def cancel_my_order(
+    order_id: str,
+    payload: CustomerCancelOrderInput,
+    decoded: Annotated[dict, Depends(get_current_user)],
+) -> OrderView:
+    """Let a customer cancel their own COD order while it's still pending.
+
+    Mirrors the admin cancel rules: only `cod_pending` orders can be self-cancelled
+    (a paid order needs a refund, which stays an admin/support action). Ownership is
+    checked across firebase_uid / customer_id / customer_phone so Fastrr orders —
+    including guest checkouts linked only by phone — are cancellable too. Notifies
+    the ops team so a cancelled order is never dispatched.
+    """
+    uid = decoded["uid"]
+    caller_phone10 = phone10(decoded.get("phone_number"))
+
+    ref = db().collection("orders").document(order_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Order not found")
+    order = snap.to_dict() or {}
+
+    if not _owns_order(order, uid, caller_phone10):
+        raise HTTPException(status_code=403, detail="Order does not belong to current user")
+
+    status = order.get("status")
+    if status == "cancelled":
+        # Idempotent: already cancelled, just return current state.
+        return _doc_to_order_view(order_id, order)
+    if status != "cod_pending":
+        raise HTTPException(
+            status_code=400,
+            detail="This order can no longer be cancelled online. "
+            "Please contact support and we'll help you.",
+        )
+
+    reason = (payload.reason or "").strip() or "Cancelled by customer"
+    update = {
+        "status": "cancelled",
+        "cancellation_reason": reason,
+        "cancelled_at": SERVER_TIMESTAMP,
+        "cancelled_by": decoded.get("phone_number") or uid,
+        "cancelled_via": "customer",
+        "updated_at": SERVER_TIMESTAMP,
+    }
+    ref.set(update, merge=True)
+    updated = ref.get().to_dict() or {}
+
+    try:
+        alert = notifications.send_order_cancel_alert(updated)
+        if not alert.get("sent"):
+            logger.warning("Order cancel team alert not sent for %s: %s", order_id, alert.get("reason"))
+    except Exception:
+        logger.exception("Order cancel team alert error for %s", order_id)
+
+    return _doc_to_order_view(order_id, updated)
 
 
 @router.post("/verify_payment", response_model=VerifyPaymentOutput)

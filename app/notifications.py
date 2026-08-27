@@ -499,3 +499,73 @@ def send_cod_team_alert(order: dict[str, Any], recipient: str | None = None) -> 
         logger.exception("Failed to render COD team alert")
         return {"sent": False, "reason": "render_error", "error": str(exc)}
     return send_email_sync(to, subject, html_body, text_body)
+
+
+def render_order_cancel_alert(order: dict[str, Any]) -> tuple[str, str, str]:
+    """Team notification for a cancelled order — so nobody ships it.
+
+    Returns (subject, html_body, text_body). `order` is the Firestore order doc
+    AFTER the cancellation fields have been merged in.
+    """
+    item = order.get("item") or {}
+    customer = order.get("customer") or {}
+    order_id = order.get("receipt") or order.get("razorpay_order_id") or "—"
+    amount_rupees = int(order.get("amount", 0)) // 100
+    qty = int(item.get("quantity", 1))
+    name = customer.get("full_name") or "—"
+    phone = customer.get("phone") or "—"
+    by = order.get("cancelled_via") or "—"
+    reason = order.get("cancellation_reason") or "—"
+
+    subject = f"❌ Order cancelled · {order_id} · ₹{amount_rupees} · {name}"
+
+    text_body = (
+        f"An order was cancelled — do NOT ship it.\n\n"
+        f"Order ID:    {order_id}\n"
+        f"Item:        {item.get('name', 'Order')} x {qty}\n"
+        f"Amount:      ₹{amount_rupees}\n"
+        f"Customer:    {name}\n"
+        f"Phone:       {phone}\n"
+        f"Cancelled by: {by}\n"
+        f"Reason:      {reason}\n\n"
+        f"— Divya Darshan 360 (automated)\n"
+    )
+
+    row = "padding:8px 0;border-bottom:1px solid #fee2e2;font-size:14px;color:#374151;"
+    lbl = "font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#9ca3af;"
+    html_body = f"""<!doctype html>
+<html><body style="margin:0;background:#fef2f2;font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:24px;">
+  <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
+    <tr><td style="background:#dc2626;padding:20px 28px;color:#fff;font-size:18px;font-weight:600;">❌ Order Cancelled — do not ship</td></tr>
+    <tr><td style="padding:24px 28px;">
+      <div style="{lbl}">Order ID</div>
+      <div style="font-family:monospace;font-size:15px;color:#dc2626;font-weight:700;{row}">{escape(str(order_id))}</div>
+      <div style="{lbl}margin-top:14px;">Item</div>
+      <div style="{row}">{escape(str(item.get('name', 'Order')))} &times; {qty}</div>
+      <div style="{lbl}margin-top:14px;">Amount</div>
+      <div style="{row}">₹{amount_rupees}</div>
+      <div style="{lbl}margin-top:14px;">Customer</div>
+      <div style="{row}">{escape(str(name))} &middot; {escape(str(phone))}</div>
+      <div style="{lbl}margin-top:14px;">Cancelled by</div>
+      <div style="{row}">{escape(str(by))}</div>
+      <div style="{lbl}margin-top:14px;">Reason</div>
+      <div style="{row}">{escape(str(reason))}</div>
+    </td></tr>
+    <tr><td style="background:#1f2937;padding:14px 28px;text-align:center;font-size:11px;color:rgba(255,255,255,0.55);">Automated alert &middot; DivyaDarshan360.com</td></tr>
+  </table>
+</body></html>"""
+
+    return subject, html_body, text_body
+
+
+def send_order_cancel_alert(order: dict[str, Any], recipient: str | None = None) -> dict:
+    """Render + send the cancellation team alert synchronously. Never raises."""
+    to = recipient or settings.team_notification_email
+    if not to:
+        return {"sent": False, "reason": "no_recipient"}
+    try:
+        subject, html_body, text_body = render_order_cancel_alert(order)
+    except Exception as exc:
+        logger.exception("Failed to render order cancel alert")
+        return {"sent": False, "reason": "render_error", "error": str(exc)}
+    return send_email_sync(to, subject, html_body, text_body)

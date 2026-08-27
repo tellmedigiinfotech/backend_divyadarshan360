@@ -187,6 +187,11 @@ class AdminCancelOrderInput(BaseModel):
     reason: Annotated[str, Field(min_length=2, max_length=500)]
 
 
+class CustomerCancelOrderInput(BaseModel):
+    # Optional — customers aren't required to justify cancelling their own order.
+    reason: Annotated[str | None, Field(default=None, max_length=500)] = None
+
+
 class OrderStatusOutput(BaseModel):
     order_id: str
     status: OrderStatus

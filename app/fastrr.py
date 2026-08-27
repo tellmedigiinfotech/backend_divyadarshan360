@@ -103,3 +103,27 @@ def fetch_order_details(order_id: str) -> dict:
     """POST /api/v1/custom-platform-order/details for a single order."""
     payload = {"order_id": order_id, "timestamp": _now_iso()}
     return _post("/api/v1/custom-platform-order/details", payload)
+
+
+def _iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def fetch_order_list(start: datetime, end: datetime, page: int = 1, limit: int = 50) -> dict:
+    """POST /api/v1/custom-platform-order/details/list for a date window.
+
+    startDate/endDate MUST be ISO-8601 with a trailing Z (e.g. 2026-08-25T00:00:00Z);
+    other formats (dd-MM-yyyy, epoch-ms as string, plain yyyy-MM-dd) are rejected.
+
+    Returns {"ok": true, "result": {"total": N, "page": P, "limit": L,
+    "data": [{"id": "<fastrr_order_id>", "status": "SUCCESS|INITIATED|CREATED"}]}}.
+    Only status == "SUCCESS" rows are real placed orders.
+    """
+    payload = {
+        "startDate": _iso_z(start),
+        "endDate": _iso_z(end),
+        "page": page,
+        "limit": limit,
+        "timestamp": _now_iso(),
+    }
+    return _post("/api/v1/custom-platform-order/details/list", payload)

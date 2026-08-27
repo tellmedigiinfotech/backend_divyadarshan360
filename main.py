@@ -134,3 +134,27 @@ def expire_stale_orders(_event: scheduler_fn.ScheduledEvent) -> None:
     logger.info(
         "expire_stale_orders: expired=%d, deleted=%d", expired_count, deleted_count
     )
+
+
+# --- Scheduled reconciliation: pull any Fastrr orders the webhook/success-page missed ---
+
+
+@scheduler_fn.on_schedule(
+    schedule="every 30 minutes",
+    region="asia-south1",
+    memory=options.MemoryOption.MB_256,
+    timeout_sec=120,
+)
+def reconcile_fastrr_orders(_event: scheduler_fn.ScheduledEvent) -> None:
+    """Walk Fastrr's recent order list and record any orders we're missing.
+
+    Fastrr's push webhook has never fired for us, and the success-page pull only
+    catches customers who reach /success. This scheduled sweep is the safety net
+    that guarantees every placed (SUCCESS) order lands in Firestore + triggers the
+    COD team alert. Idempotent, so re-running is harmless.
+    """
+    init_firebase()
+    from app.routers.fastrr import reconcile_recent_orders
+
+    summary = reconcile_recent_orders(days=2)
+    logger.info("reconcile_fastrr_orders: %s", summary)
