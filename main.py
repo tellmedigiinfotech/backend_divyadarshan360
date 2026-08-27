@@ -44,7 +44,7 @@ def api(req: https_fn.Request) -> https_fn.Response:
 
     https://asia-south1-<project>.cloudfunctions.net/api/health
     https://asia-south1-<project>.cloudfunctions.net/api/orders/create_order
-    https://asia-south1-<project>.cloudfunctions.net/api/razorpay/webhook
+    https://asia-south1-<project>.cloudfunctions.net/api/fastrr/webhook/order
     """
     # Pass body bytes verbatim; FastAPI parses JSON itself.
     body = req.get_data(cache=False, as_text=False)

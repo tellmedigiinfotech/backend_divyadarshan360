@@ -23,13 +23,9 @@ class Settings(BaseSettings):
     # validator runs.
     allowed_origins: Annotated[list[str], NoDecode, Field(default_factory=lambda: ["*"])]
 
-    razorpay_key_id: str
-    razorpay_key_secret: str
-    razorpay_webhook_secret: str | None = None
     receipt_prefix: str = "DD360"
 
     # Flat handling fee added to Cash-on-Delivery orders, in paise (5000 = ₹50).
-    # Keep the frontend COD_FEE (checkout-client.tsx) in sync with this value.
     cod_fee_paise: int = 5000
 
     # Fastrr by Shiprocket — Checkout integration.
@@ -78,15 +74,6 @@ class Settings(BaseSettings):
 
     # Internal inbox that receives an alert whenever a new COD order is placed.
     team_notification_email: str = "team.divyadarshan@gmail.com"
-
-    # Razorpay Smart Collect (virtual account) payee details shown to customers
-    # when they pay via direct UPI/bank transfer outside the standard checkout
-    # modal. These match the assigned values from the Razorpay dashboard.
-    smart_collect_upi_id: str = "rpy.payto000009179099666@icici"
-    smart_collect_account_number: str = "2223006306876848"
-    smart_collect_ifsc: str = "UTIB000RAZP"
-    smart_collect_beneficiary: str = "TELLME DIGIINFOTECH PRIVATE LIMITED"
-    smart_collect_order_expiry_minutes: int = 30
 
     # Firebase reserves env vars beginning with FIREBASE_/X_GOOGLE_/EXT_ in
     # Cloud Functions, so we use neutral SERVICE_ACCOUNT_* names instead.

@@ -22,22 +22,6 @@ class CartLineInput(BaseModel):
     quantity: Annotated[int, Field(ge=1, le=10)] = 1
 
 
-class CreateOrderInput(BaseModel):
-    item: CartLineInput
-    customer: CustomerInput
-    shipping_address: ShippingAddressInput
-
-
-class CreateOrderOutput(BaseModel):
-    razorpay_order_id: str
-    razorpay_key_id: str
-    amount: int
-    currency: str
-    receipt: str
-    customer_id: str
-    product_name: str
-
-
 class CreateCodOrderInput(BaseModel):
     item: CartLineInput
     customer: CustomerInput
@@ -50,20 +34,6 @@ class CreateCodOrderOutput(BaseModel):
     amount: int
     currency: str
     product_name: str
-
-
-class VerifyPaymentInput(BaseModel):
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
-
-
-class VerifyPaymentOutput(BaseModel):
-    status: OrderStatus
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    amount_paid: int
-    currency: str
 
 
 class OrderItemView(BaseModel):
@@ -92,9 +62,6 @@ class OrderView(BaseModel):
     shipping_address: ShippingAddressInput
     created_at: str | None = None
     paid_at: str | None = None
-    # Sent so the /account "Continue payment" button can re-open the Razorpay
-    # modal for a pending order without making the backend roundtrip again.
-    razorpay_key_id: str | None = None
     fulfillment_status: str | None = None
     tracking_number: str | None = None
     courier: str | None = None
@@ -115,34 +82,6 @@ class OrderView(BaseModel):
     cancellation_request_reason: str | None = None
     source: str | None = None
     fastrr_order_id: str | None = None
-
-
-# --- Smart Collect (UPI virtual account) flow ---
-
-
-class SmartCollectCreateInput(BaseModel):
-    item: CartLineInput
-    customer: CustomerInput
-    shipping_address: ShippingAddressInput
-
-
-class SmartCollectCreateOutput(BaseModel):
-    order_id: str
-    reference: str
-    amount_paise: int
-    amount_display: str
-    currency: str
-    upi_id: str
-    account_number: str
-    ifsc: str
-    beneficiary_name: str
-    expires_at_iso: str | None = None
-
-
-class OrderPayer(BaseModel):
-    name: str | None = None
-    vpa: str | None = None
-    method: str | None = None
 
 
 # --- Admin schemas ---
@@ -195,19 +134,3 @@ class AdminCancelOrderInput(BaseModel):
 class CustomerCancelOrderInput(BaseModel):
     # Optional — customers aren't required to justify cancelling their own order.
     reason: Annotated[str | None, Field(default=None, max_length=500)] = None
-
-
-class OrderStatusOutput(BaseModel):
-    order_id: str
-    status: OrderStatus
-    amount_paise: int
-    amount_display: str
-    currency: str
-    reference: str | None = None
-    upi_id: str | None = None
-    account_number: str | None = None
-    ifsc: str | None = None
-    beneficiary_name: str | None = None
-    paid_at: str | None = None
-    payer: OrderPayer | None = None
-    expires_at_iso: str | None = None
