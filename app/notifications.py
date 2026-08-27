@@ -569,3 +569,75 @@ def send_order_cancel_alert(order: dict[str, Any], recipient: str | None = None)
         logger.exception("Failed to render order cancel alert")
         return {"sent": False, "reason": "render_error", "error": str(exc)}
     return send_email_sync(to, subject, html_body, text_body)
+
+
+def render_cancellation_request_alert(order: dict[str, Any]) -> tuple[str, str, str]:
+    """Team notification for a PAID order the customer wants cancelled/refunded.
+
+    Unlike a COD cancel, this does not change the order — a human must issue the
+    refund from the admin panel. Returns (subject, html_body, text_body).
+    """
+    item = order.get("item") or {}
+    customer = order.get("customer") or {}
+    order_id = order.get("receipt") or order.get("razorpay_order_id") or "—"
+    amount_rupees = int(order.get("amount_paid", order.get("amount", 0))) // 100
+    qty = int(item.get("quantity", 1))
+    name = customer.get("full_name") or "—"
+    phone = customer.get("phone") or "—"
+    email = customer.get("email") or "—"
+    reason = order.get("cancellation_request_reason") or "—"
+
+    subject = f"↩️ Refund requested · {order_id} · ₹{amount_rupees} · {name}"
+
+    text_body = (
+        f"A customer requested cancellation of a PAID order — review and refund.\n\n"
+        f"Order ID:    {order_id}\n"
+        f"Item:        {item.get('name', 'Order')} x {qty}\n"
+        f"Amount paid: ₹{amount_rupees}\n"
+        f"Customer:    {name}\n"
+        f"Phone:       {phone}\n"
+        f"Email:       {email}\n"
+        f"Reason:      {reason}\n\n"
+        f"Action: open the order in the admin dashboard and issue a refund.\n\n"
+        f"— Divya Darshan 360 (automated)\n"
+    )
+
+    row = "padding:8px 0;border-bottom:1px solid #fef3c7;font-size:14px;color:#374151;"
+    lbl = "font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#9ca3af;"
+    html_body = f"""<!doctype html>
+<html><body style="margin:0;background:#fffbeb;font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:24px;">
+  <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
+    <tr><td style="background:#d97706;padding:20px 28px;color:#fff;font-size:18px;font-weight:600;">↩️ Refund Requested — paid order</td></tr>
+    <tr><td style="padding:24px 28px;">
+      <div style="{lbl}">Order ID</div>
+      <div style="font-family:monospace;font-size:15px;color:#d97706;font-weight:700;{row}">{escape(str(order_id))}</div>
+      <div style="{lbl}margin-top:14px;">Item</div>
+      <div style="{row}">{escape(str(item.get('name', 'Order')))} &times; {qty}</div>
+      <div style="{lbl}margin-top:14px;">Amount paid</div>
+      <div style="{row}font-weight:700;">₹{amount_rupees}</div>
+      <div style="{lbl}margin-top:14px;">Customer</div>
+      <div style="{row}">{escape(str(name))} &middot; {escape(str(phone))} &middot; {escape(str(email))}</div>
+      <div style="{lbl}margin-top:14px;">Reason</div>
+      <div style="{row}">{escape(str(reason))}</div>
+      <div style="margin-top:18px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 14px;font-size:13px;color:#92400e;">
+        Open this order in the admin dashboard and issue a refund. The order status is unchanged until you do.
+      </div>
+    </td></tr>
+    <tr><td style="background:#1f2937;padding:14px 28px;text-align:center;font-size:11px;color:rgba(255,255,255,0.55);">Automated alert &middot; DivyaDarshan360.com</td></tr>
+  </table>
+</body></html>"""
+
+    return subject, html_body, text_body
+
+
+def send_cancellation_request_alert(order: dict[str, Any], recipient: str | None = None) -> dict:
+    """Render + send the refund-request team alert synchronously. Never raises."""
+    to = recipient or settings.team_notification_email
+    if not to:
+        return {"sent": False, "reason": "no_recipient"}
+    try:
+        subject, html_body, text_body = render_cancellation_request_alert(order)
+    except Exception as exc:
+        logger.exception("Failed to render cancellation request alert")
+        return {"sent": False, "reason": "render_error", "error": str(exc)}
+    return send_email_sync(to, subject, html_body, text_body)

@@ -86,6 +86,9 @@ def _doc_to_order_view(order_id: str, data: dict) -> OrderView:
         refund_reason=data.get("refund_reason"),
         cancelled_at=_ts_to_iso(data.get("cancelled_at")),
         cancellation_reason=data.get("cancellation_reason"),
+        cancellation_requested=bool(data.get("cancellation_requested")),
+        cancellation_requested_at=_ts_to_iso(data.get("cancellation_requested_at")),
+        cancellation_request_reason=data.get("cancellation_request_reason"),
     )
 
 
@@ -400,6 +403,70 @@ def cancel_my_order(
             logger.warning("Order cancel team alert not sent for %s: %s", order_id, alert.get("reason"))
     except Exception:
         logger.exception("Order cancel team alert error for %s", order_id)
+
+    return _doc_to_order_view(order_id, updated)
+
+
+@router.post("/{order_id}/request-cancellation", response_model=OrderView)
+def request_order_cancellation(
+    order_id: str,
+    payload: CustomerCancelOrderInput,
+    decoded: Annotated[dict, Depends(get_current_user)],
+) -> OrderView:
+    """Let a customer request cancellation of a PAID order (needs a refund).
+
+    A paid order can't be self-cancelled — the money has moved, so a refund is an
+    admin/support action. This records the request on the order and emails the ops
+    team to review + refund from the admin dashboard. The order status is left
+    unchanged until a human acts. Idempotent per order.
+    """
+    uid = decoded["uid"]
+    caller_phone10 = phone10(decoded.get("phone_number"))
+
+    ref = db().collection("orders").document(order_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Order not found")
+    order = snap.to_dict() or {}
+
+    if not _owns_order(order, uid, caller_phone10):
+        raise HTTPException(status_code=403, detail="Order does not belong to current user")
+
+    status = order.get("status")
+    if status == "cod_pending":
+        # COD isn't paid yet — cancel it directly instead.
+        raise HTTPException(
+            status_code=400,
+            detail="This order can be cancelled directly. Please use Cancel order.",
+        )
+    if status != "paid":
+        raise HTTPException(
+            status_code=400,
+            detail="Only a paid order can be requested for cancellation. "
+            "Please contact support for help.",
+        )
+
+    if order.get("cancellation_requested"):
+        # Idempotent: already requested, return current state.
+        return _doc_to_order_view(order_id, order)
+
+    reason = (payload.reason or "").strip() or "Requested by customer"
+    update = {
+        "cancellation_requested": True,
+        "cancellation_request_reason": reason,
+        "cancellation_requested_at": SERVER_TIMESTAMP,
+        "cancellation_requested_by": decoded.get("phone_number") or uid,
+        "updated_at": SERVER_TIMESTAMP,
+    }
+    ref.set(update, merge=True)
+    updated = ref.get().to_dict() or {}
+
+    try:
+        alert = notifications.send_cancellation_request_alert(updated)
+        if not alert.get("sent"):
+            logger.warning("Cancellation request alert not sent for %s: %s", order_id, alert.get("reason"))
+    except Exception:
+        logger.exception("Cancellation request alert error for %s", order_id)
 
     return _doc_to_order_view(order_id, updated)
 

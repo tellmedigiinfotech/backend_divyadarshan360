@@ -75,3 +75,4 @@ class CustomerOrderListItem(BaseModel):
     courier: str | None = None
     shipped_at: str | None = None
     payment_method: str | None = None
+    cancellation_requested: bool = False

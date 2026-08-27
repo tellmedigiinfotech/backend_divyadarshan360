@@ -151,6 +151,7 @@ def list_my_orders(
                 courier=data.get("courier"),
                 shipped_at=_ts_to_iso(data.get("shipped_at")),
                 payment_method=data.get("payment_method"),
+                cancellation_requested=bool(data.get("cancellation_requested")),
             )
         )
     return out

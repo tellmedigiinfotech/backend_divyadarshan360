@@ -110,6 +110,9 @@ class OrderView(BaseModel):
     refund_reason: str | None = None
     cancelled_at: str | None = None
     cancellation_reason: str | None = None
+    cancellation_requested: bool = False
+    cancellation_requested_at: str | None = None
+    cancellation_request_reason: str | None = None
 
 
 # --- Smart Collect (UPI virtual account) flow ---
