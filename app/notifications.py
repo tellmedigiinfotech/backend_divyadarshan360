@@ -571,6 +571,49 @@ def send_order_cancel_alert(order: dict[str, Any], recipient: str | None = None)
     return send_email_sync(to, subject, html_body, text_body)
 
 
+def send_cod_limit_customer_notice(order: dict[str, Any]) -> dict:
+    """Tell the customer their duplicate COD order was cancelled — pay online.
+
+    Fires when the one-active-COD-per-customer rule auto-cancels a second COD
+    order. Best-effort: Fastrr often gives a placeholder email (name@fastrr.com),
+    so we only send to a real-looking address. Never raises.
+    """
+    customer = order.get("customer") or {}
+    email_addr = (customer.get("email") or "").strip()
+    # Skip empty / Fastrr placeholder addresses.
+    if "@" not in email_addr or email_addr.lower().endswith("@fastrr.com"):
+        return {"sent": False, "reason": "no_real_email"}
+
+    name = customer.get("full_name") or "there"
+    order_id = order.get("receipt") or "—"
+    site = "https://divyadarshan360.com/vr-headset"
+    subject = "Action needed: pay online to confirm your order"
+    text_body = (
+        f"Hi {name},\n\n"
+        f"You already have a Cash-on-Delivery order with us that's still on the way, "
+        f"so we couldn't place another COD order ({order_id}).\n\n"
+        f"To get this one too, please order again and pay online (UPI/card) here:\n"
+        f"  {site}\n\n"
+        f"Online orders have no such limit. Sorry for the inconvenience!\n\n"
+        f"— Divya Darshan 360\n"
+    )
+    html_body = f"""<!doctype html>
+<html><body style="margin:0;background:#fff7ed;font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:24px;">
+  <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
+    <tr><td style="background:#b8860b;padding:20px 28px;color:#fff;font-size:18px;font-weight:600;">Pay online to confirm your order</td></tr>
+    <tr><td style="padding:24px 28px;font-size:14px;color:#374151;line-height:1.6;">
+      <p style="margin:0 0 14px;">Hi {escape(str(name))},</p>
+      <p style="margin:0 0 14px;">You already have a Cash-on-Delivery order with us that's still on the way, so we couldn't place another COD order (<strong>{escape(str(order_id))}</strong>).</p>
+      <p style="margin:0 0 20px;">To get this one too, please order again and choose an online payment (UPI/card) — online orders have no such limit.</p>
+      <a href="{site}" style="display:inline-block;background:#b8860b;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;">Order &amp; pay online</a>
+      <p style="margin:20px 0 0;font-size:13px;color:#6b7280;">Sorry for the inconvenience!</p>
+    </td></tr>
+    <tr><td style="background:#1f2937;padding:14px 28px;text-align:center;font-size:11px;color:rgba(255,255,255,0.55);">DivyaDarshan360.com &middot; TellMe Digi Infotech Pvt Ltd</td></tr>
+  </table>
+</body></html>"""
+    return send_email_sync(email_addr, subject, html_body, text_body)
+
+
 def render_cancellation_request_alert(order: dict[str, Any]) -> tuple[str, str, str]:
     """Team notification for a PAID order the customer wants cancelled/refunded.
 

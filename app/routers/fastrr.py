@@ -218,6 +218,33 @@ def resolve_customer_id(phone_10: str) -> str | None:
     return snaps[0].id if snaps else None
 
 
+def has_active_cod_order(phone_10: str) -> bool:
+    """True if this customer already has an OPEN COD order.
+
+    "Open" = a COD order still in `cod_pending` (placed or shipped but not yet
+    delivered/cancelled). Enforces the rule: one active COD order per customer.
+    Prepaid orders don't count. Matched on customer_phone (last 10 digits).
+    """
+    if not phone_10:
+        return False
+    try:
+        snaps = (
+            db()
+            .collection("orders")
+            .where(filter=FieldFilter("customer_phone", "==", phone_10))
+            .stream()
+        )
+    except gax_exceptions.GoogleAPIError:
+        logger.exception("has_active_cod_order lookup failed for %s", phone_10)
+        return False
+    for snap in snaps:
+        d = snap.to_dict() or {}
+        pm = d.get("payment_method") or ""
+        if d.get("status") == "cod_pending" and pm in ("fastrr_cod", "cod_whatsapp"):
+            return True
+    return False
+
+
 def _persist_fastrr_order(
     *,
     fastrr_order_id: str,
@@ -229,27 +256,42 @@ def _persist_fastrr_order(
     phone: str,
     email: str | None,
     addr: dict,
-) -> tuple[str, bool]:
-    """Create the Firestore order if it doesn't exist. Returns (receipt, created).
+) -> tuple[str, bool, str]:
+    """Create the Firestore order if it doesn't exist. Returns (receipt, created, status).
 
     Idempotent on fastrr_order_id, so the webhook and the pull-based sync can both
     run without creating duplicates.
+
+    COD limit: a customer may have only ONE active (cod_pending) COD order. If a
+    second COD order arrives while one is still open, it's recorded already
+    `cancelled` (Fastrr gives us no way to block COD at checkout) and the customer
+    is asked to pay online. Prepaid orders are unlimited.
     """
     orders = db().collection("orders")
     existing = list(orders.where("fastrr_order_id", "==", fastrr_order_id).limit(1).stream())
     if existing:
-        return (existing[0].to_dict() or {}).get("receipt", ""), False
+        data = existing[0].to_dict() or {}
+        return data.get("receipt", ""), False, data.get("status") or ""
 
     product = get_product("mobile-vr-box")
     receipt = _make_receipt()
     cust_phone10 = phone10(phone)
     customer_id = resolve_customer_id(cust_phone10)
+
+    # Enforce one active COD per customer (only on genuinely new COD orders).
+    cod_blocked = is_cod and has_active_cod_order(cust_phone10)
+
+    if is_cod:
+        status = "cancelled" if cod_blocked else "cod_pending"
+    else:
+        status = "paid"
+
     order_doc = {
         "fastrr_order_id": fastrr_order_id,
         "razorpay_order_id": None,
         "receipt": receipt,
         "source": "fastrr",
-        "status": "cod_pending" if is_cod else "paid",
+        "status": status,
         "payment_method": "fastrr_cod" if is_cod else "fastrr_prepaid",
         "payment_type": "CASH_ON_DELIVERY" if is_cod else "PREPAID",
         "amount": amount_paise,
@@ -277,9 +319,28 @@ def _persist_fastrr_order(
         "updated_at": SERVER_TIMESTAMP,
         "paid_at": None if is_cod else SERVER_TIMESTAMP,
     }
+    if cod_blocked:
+        order_doc["cancellation_reason"] = (
+            "COD limit: one active COD order per customer. Please pay online for additional orders."
+        )
+        order_doc["cancelled_via"] = "system_cod_limit"
+        order_doc["cancelled_at"] = SERVER_TIMESTAMP
+
     orders.document().set(order_doc)
 
-    if is_cod:
+    if cod_blocked:
+        # Don't send the "ship this" alert. Tell the team not to ship, and nudge
+        # the customer to pay online (best-effort; Fastrr emails are placeholders).
+        logger.info("COD limit hit for %s (%s) — auto-cancelled %s", cust_phone10, receipt, fastrr_order_id)
+        try:
+            notifications.send_order_cancel_alert(order_doc)
+        except Exception:
+            logger.exception("COD-limit team alert error")
+        try:
+            notifications.send_cod_limit_customer_notice(order_doc)
+        except Exception:
+            logger.exception("COD-limit customer notice error")
+    elif is_cod:
         try:
             alert = notifications.send_cod_team_alert(order_doc)
             if alert.get("sent"):
@@ -289,7 +350,7 @@ def _persist_fastrr_order(
         except Exception:
             logger.exception("Fastrr COD team alert error")
 
-    return receipt, True
+    return receipt, True, status
 
 
 def _sync_one(order_id: str) -> dict:
@@ -317,7 +378,7 @@ def _sync_one(order_id: str) -> dict:
     addr = r.get("shipping_address") or {}
     full_name = " ".join(x for x in [addr.get("first_name"), addr.get("last_name")] if x).strip()
 
-    receipt, created = _persist_fastrr_order(
+    receipt, created, status = _persist_fastrr_order(
         fastrr_order_id=fastrr_order_id,
         is_cod=is_cod,
         amount_paise=amount_paise,
@@ -328,12 +389,15 @@ def _sync_one(order_id: str) -> dict:
         email=r.get("email"),
         addr=addr,
     )
+    # A COD order auto-cancelled by the one-active-COD rule.
+    cod_limit_blocked = is_cod and status == "cancelled"
     return {
         "found": True,
         "created": created,
         "receipt": receipt,
         "amount_paise": amount_paise,
-        "status": "cod_pending" if is_cod else "paid",
+        "status": status,
+        "cod_limit_blocked": cod_limit_blocked,
     }
 
 
@@ -463,77 +527,34 @@ def order_webhook(payload: dict, token: Annotated[str | None, Query()] = None) -
     if not fastrr_order_id:
         raise HTTPException(status_code=400, detail="Missing order_id.")
 
+    product = get_product("mobile-vr-box")
+    unit_rupees = product.unit_price_paise / 100 if product else 699
+    subtotal = float(payload.get("subtotal_price") or 0)
+    qty = max(1, round(subtotal / unit_rupees)) if subtotal else 1
+
+    payment_type = (payload.get("payment_type") or "").upper()
+    is_cod = payment_type == "CASH_ON_DELIVERY"
+    amount_paise = round(float(payload.get("total_amount_payable") or 0) * 100)
+
+    addr = payload.get("shipping_address") or {}
+    full_name = " ".join(x for x in [addr.get("first_name"), addr.get("last_name")] if x).strip()
+
+    # Route through the shared persister so idempotency, account linking, the COD
+    # limit, and all team/customer alerts behave identically to the pull path.
     try:
-        orders = db().collection("orders")
-        # Idempotency: skip if we've already recorded this Fastrr order.
-        existing = list(orders.where("fastrr_order_id", "==", fastrr_order_id).limit(1).stream())
-        if existing:
-            return {"ok": True, "duplicate": True}
-
-        product = get_product("mobile-vr-box")
-        unit_rupees = product.unit_price_paise / 100 if product else 699
-        subtotal = float(payload.get("subtotal_price") or 0)
-        qty = max(1, round(subtotal / unit_rupees)) if subtotal else 1
-
-        payment_type = (payload.get("payment_type") or "").upper()
-        is_cod = payment_type == "CASH_ON_DELIVERY"
-        amount_paise = round(float(payload.get("total_amount_payable") or 0) * 100)
-
-        addr = payload.get("shipping_address") or {}
-        full_name = " ".join(
-            x for x in [addr.get("first_name"), addr.get("last_name")] if x
-        ).strip()
-
-        cust_phone10 = phone10(payload.get("phone"))
-        customer_id = resolve_customer_id(cust_phone10)
-        receipt = _make_receipt()
-        order_doc = {
-            "fastrr_order_id": fastrr_order_id,
-            "razorpay_order_id": None,
-            "receipt": receipt,
-            "source": "fastrr",
-            "status": "cod_pending" if is_cod else "paid",
-            "payment_method": "fastrr_cod" if is_cod else "fastrr_prepaid",
-            "payment_type": payment_type,
-            "amount": amount_paise,
-            "amount_paid": 0 if is_cod else amount_paise,
-            "currency": "INR",
-            "cod_fee_paise": settings.cod_fee_paise if is_cod else 0,
-            "customer_id": customer_id,
-            "customer_phone": cust_phone10,
-            "item": {
-                "sku": product.sku if product else "mobile-vr-box",
-                "name": product.name if product else "Mobile VR Box",
-                "quantity": qty,
-            },
-            "customer": {
-                "full_name": full_name or "Customer",
-                "phone": payload.get("phone") or "",
-                "email": payload.get("email") or None,
-            },
-            "shipping_address": {
-                "line1": addr.get("line1") or "",
-                "city": addr.get("city") or "",
-                "state": addr.get("state") or "",
-                "pincode": addr.get("pincode") or "",
-                "country": addr.get("country") or "IN",
-            },
-            "created_at": SERVER_TIMESTAMP,
-            "updated_at": SERVER_TIMESTAMP,
-            "paid_at": None if is_cod else SERVER_TIMESTAMP,
-        }
-        orders.document().set(order_doc)
+        receipt, created, status = _persist_fastrr_order(
+            fastrr_order_id=fastrr_order_id,
+            is_cod=is_cod,
+            amount_paise=amount_paise,
+            cod_fee_paise=settings.cod_fee_paise if is_cod else 0,
+            qty=qty,
+            full_name=full_name,
+            phone=payload.get("phone") or "",
+            email=payload.get("email"),
+            addr=addr,
+        )
     except gax_exceptions.GoogleAPIError as exc:
         logger.exception("Firestore error creating Fastrr order")
         raise HTTPException(status_code=503, detail="Could not record order.") from exc
 
-    # Team alert for COD orders (mirrors the existing COD flow). Non-fatal.
-    if is_cod:
-        try:
-            alert = notifications.send_cod_team_alert(order_doc)
-            if not alert.get("sent"):
-                logger.warning("Fastrr COD team alert not sent: %s", alert.get("reason"))
-        except Exception:
-            logger.exception("Fastrr COD team alert error")
-
-    return {"ok": True, "receipt": receipt}
+    return {"ok": True, "receipt": receipt, "created": created, "status": status}
